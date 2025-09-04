@@ -1,0 +1,4 @@
+prom0 : prom-2.6z-0.bin
+prom1 : prom-2.6z-1.bin
+
+

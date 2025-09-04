@@ -1,0 +1,102 @@
+diff -wur z80-orig/Z80.c z80/Z80.c
+--- z80-orig/Z80.c	1997-09-04 12:14:14.000000000 +0200
++++ z80/Z80.c	2024-01-08 08:50:01.757067491 +0100
+@@ -12,7 +12,6 @@
+ #include <stdio.h>
+ #include <string.h>
+ #include <stdlib.h>
+-
+ #include "Z80.h"
+ 
+ #define M_RDMEM(A)      Z80_RDMEM(A)
+@@ -2466,6 +2465,45 @@
+  return Z80_Running;
+ }
+ 
++/* 
++ * This one runs just a single step to make it easier to debug code.
++ * It will fire off the interrupts similar to Z80_Execute. 
++ */ 
++int Z80_Step (void)
++{
++    unsigned opcode;
++    Z80_Running=1;
++    InitTables ();
++
++#ifdef TRACE
++    pc_trace[pc_count]=R.PC.D;
++    pc_count=(pc_count+1)&255;
++#endif
++#ifdef DEBUG
++    if (R.PC.D==Z80_Trap) Z80_Trace=1;
++    if (Z80_Trace) Z80_Debug(&R);
++    if (!Z80_Running)
++        return Z80_Running;  // TODO: is this correct? 
++#endif
++    ++R.R;
++    opcode=M_RDOP(R.PC.D);
++    R.PC.W.l++;
++    Z80_ICount-=cycles_main[opcode];
++    (*(opcode_main[opcode]))();
++
++    if (Z80_ICount <= 0) {
++        Z80_ICount+=Z80_IPeriod;
++        Interrupt (Z80_Interrupt());
++    }
++    return Z80_Running;
++}
++
++Z80_Regs *Z80_GetRegs_Ref()
++{
++    return &R;
++}
++
++
+ /****************************************************************************/
+ /* Interpret Z80 code                                                       */
+ /****************************************************************************/
+diff -wur z80-orig/Z80Dasm.h z80/Z80Dasm.h
+--- z80-orig/Z80Dasm.h	1997-09-04 12:14:14.000000000 +0200
++++ z80/Z80Dasm.h	2024-01-12 00:14:36.356087728 +0100
+@@ -212,7 +212,8 @@
+  char *S;
+  char *r;
+  int i,j,k;
+- unsigned char buf[10];
++ // unsigned char buf[10];
++ char buf[100];
+  char Offset;
+  i=Offset=0;
+  r="INTERNAL PROGRAM ERROR";
+@@ -285,7 +286,7 @@
+     strcat (dest,buf);
+     break;
+    case 'Y':
+-    sprintf (buf,"(%s%c$%02x)",r,Sign(Offset),Abs(Offset));
++       sprintf ((char*) buf,"(%s%c$%02x)",r,Sign(Offset),Abs(Offset));
+     strcat (dest,buf);
+     break;
+    case 'I':
+diff -wur z80-orig/Z80Debug.c z80/Z80Debug.c
+--- z80-orig/Z80Debug.c	1997-09-04 12:14:14.000000000 +0200
++++ z80/Z80Debug.c	2024-01-02 22:50:35.052873649 +0100
+@@ -47,11 +47,19 @@
+  S[19]='\0';
+  for (i=7;i>=0;--i) { f[7-i]=(R->AF.D&(1<<i))? flags[7-i]:'.'; }
+  f[8]='\0';
++#if 1
++  printf ("%04X: %s  AT SP(%04X): %04X %04X  FLAGS: %s ", R->PC.D, S, R->SP,
++          Z80_RDMEM(R->SP.D)+Z80_RDMEM((R->SP.D+1)&0xFFFF)*256,
++          Z80_RDMEM((R->SP.D+2)&0xFFFF)+Z80_RDMEM((R->SP.D+3)&0xFFFF)*256,f);
++ printf ("%2sAF:%04X BC:%04X DE:%04X HL:%04X IX:%04X IY:%04X\n",
++           "",R->AF.D,R->BC.D,R->DE.D,R->HL.D,R->IX.D,R->IY.D);
++#else
+  printf ("%04X: %s  AT SP: %04X %04X  FLAGS: %s\n",R->PC.D,S,
+           Z80_RDMEM(R->SP.D)+Z80_RDMEM((R->SP.D+1)&0xFFFF)*256,
+           Z80_RDMEM((R->SP.D+2)&0xFFFF)+Z80_RDMEM((R->SP.D+3)&0xFFFF)*256,f);
+  printf ("%27sAF:%04X BC:%04X DE:%04X HL:%04X IX:%04X IY:%04X\n",
+            "",R->AF.D,R->BC.D,R->DE.D,R->HL.D,R->IX.D,R->IY.D);
++#endif
+ }
+ 
+ #endif
