@@ -12,6 +12,7 @@ TODO:
 - move debug output to logging, which can be to a (optionally specified) file.
 - add serial ports for the serial card mymux is using.
 - Check timer interrupt. Mymux etc may need it.
+- better org and separation between cpu board and computer (with multiple board types)
 
 Ideas:
 - maybe move some of the emulation to C later to make this portable to smaller devices?
@@ -107,7 +108,7 @@ class IOPrint(IODevice):
 # Dip switch pins 3-8 are connected to an input buffer, corresponding to bit 2-7
 # -> 9b would then mean switch  8+5+4+2+1 high. But I can't find the connections for pins 1-2, maybe something else than the dip switch.
 #    alternatively, the dip switches are grounded, so it may be a pull-up signal. Looks like there might be a resistor pack connected
-#    along the lines up to te input side of the port
+#    along the lines up to the input side of the port
 # 
 # Observed behaviour:
 # 
@@ -243,8 +244,8 @@ class IOSerial(IODevice):
         match port:
             case self.BD:
                 # Emulate write to console (sio B)
-                print(chr(val), end="")
-                sys.stdout.flush()
+                # print(chr(val), end="")
+                # sys.stdout.flush()
                 if args.to:
                     with open(args.to, 'w') as f:
                         f.write(chr(val))
@@ -281,7 +282,15 @@ class IOSerial(IODevice):
                     self.s = self.s[1:]
                     return ord(c)
 
+                
+class IOSerialDim1001(IOSerial):
+    # The serial port for the console on DIM 1001 uses a different UART and different ports.
+    BC = 1
+    BD = 0
+    ALL = [BC, BD]
+    
 
+                
 class DiskDrive:
     # Based on dim-1030 info
     SECTOR_D_SIZE = 128
@@ -648,11 +657,11 @@ class IODiskController(IODevice):
 
 
 def io_in(port):
-    return io_ports[port].read(port)
+    return board.io_ports[port].read(port)
 
 
 def io_out(port, val):
-    io_ports[port].write(port, val)
+    board.io_ports[port].write(port, val)
 
 
 def dbtrace(prev_pc, r, pc):
@@ -690,7 +699,7 @@ def check_console():
             print("YES, GOT cr")
         if ch == "\n":
             ch = "\r"  # doesn't expect newline...
-        sport.queue_string(0.01, ch.decode("UTF-8"))
+        board.sport.queue_string(0.01, ch.decode("UTF-8"))
 
             
 def run_step(prev_pc):
@@ -707,7 +716,6 @@ def set_monitor_protect(protected=True):
     print(f"Setting memory protection for monitor to {pval}")
     mem_set_prot(0, PROM_SIZE-1, pval)
     mem_set_prot(0x1000, 0x1000 + PROM_SIZE - 1, pval)
-
 
 
 def run_sim_stepmode():
@@ -754,41 +762,71 @@ def run_sim_stepmode():
 def add_prom(start_addr, fname):
     """Adds a PROM image starting at start_addr.
     """
+    print(f"Adding prom at {start_addr:04x} : {fname}")
     pbytes = open(fname, "rb").read()
     for offset, b in enumerate(pbytes):
         mem_wr(start_addr + offset, b)
 
+
+class Board:
+    btypes = {}
+    def __init__(self, config):
+        self.config = config
+        # Set up I/O address space
+        self.io_ports = defaultdict(IOPrint)
+
+
+class Board1001(Board):
+    def __init__(self, config):
+        super().__init__(config)
+        self.sport = IOSerialDim1001()
+        self.sport.register_ports(self.io_ports)
+
+        # Dim 1001 uses only one prom chip.
+        add_prom(     0, Path(args.c, config['prom0']))
+
+        # TODO: this probably won't work yet.
+        # The disk controller appears to be mapped to the same ports
+        # as for the one used in the 1003 proms, and the code
+        # appears to be fairly similar. There are probably some minor
+        # differences that the disk emulator doesn't catch yet.
+        print("WARNING: disk support for dim-1001 boards probably don't work yet")
+        self.dsk = IODiskController(d_imgs)
+        self.dsk.register_ports(self.io_ports)
+
+
+class Board1003(Board):
+    def __init__(self, config):
+        super().__init__(config)
+        self.sport = IOSerial()
+        self.sport.register_ports(self.io_ports)
+        self.pport = IOPar()
+        self.pport.register_ports(self.io_ports)
+
+        if 0:
+            # For now, just ignore the counter/timer. TODO: fix this.
+            self.ign = IOIgnore()
+            self.ign.register_ports(self.io_ports, IOCTC.ALL)
+        else:
+            self.ctcdev = IOCTC()
+            self.ctcdev.register_ports(self.io_ports)
+
+        self.iop14 = IOP14()
+        self.iop14.register_ports(self.io_ports)
+
+        # Dim 1003 uses two proms. The second one is mapped at 0x1000, leaving a region of RAM between the chips.
+        add_prom(     0, Path(args.c, config['prom0']))
+        add_prom(0x1000, Path(args.c, config['prom1']))
+        
+        self.dsk = IODiskController(d_imgs)
+        self.dsk.register_ports(self.io_ports)
+
     
-# Set up I/O address space
-io_ports = defaultdict(IOPrint)
-
-sport = IOSerial()
-sport.register_ports(io_ports)
-
-pport = IOPar()
-pport.register_ports(io_ports)
-
-if 0:
-    # For now, just ignore the counter/timer. TODO: fix this.
-    ign = IOIgnore()
-    ign.register_ports(io_ports, IOCTC.ALL)
-else:
-    ctcdev = IOCTC()
-    ctcdev.register_ports(io_ports)
-
-iop14 = IOP14()
-iop14.register_ports(io_ports)
-    
-
-set_in_callback(io_in)
-set_out_callback(io_out)
-
-
 parser = argparse.ArgumentParser()
-parser.add_argument("-t")
-parser.add_argument("-ti")
-parser.add_argument("-to")
-parser.add_argument("-script")
+parser.add_argument("-t", help="Console I/O. Use if input and output are to the same device.")
+parser.add_argument("-ti", help="Console input")
+parser.add_argument("-to", help="Console output")
+parser.add_argument("-script", help="Script to send to the console input.")
 # parser.add_argument("--disk", nargs='+')
 parser.add_argument("-c", default="run-tst", help="Config directory path (and where disk images are stored)")
 args = parser.parse_args()
@@ -799,24 +837,7 @@ if args.t:
     args.to = args.t
 
 config = read_config(args.c)
-
-# Get proms
-add_prom(     0, Path(args.c, config['prom0']))
-add_prom(0x1000, Path(args.c, config['prom1']))
-
-if args.script in ["t", "true"]:
-    # Add some strings to automate testing
-    # NB: no enter after this as it would abort it after the first line
-    sport.queue_string(0.1, "D" + "1000" + "1100")
-    # This one needs a "return" to work.
-    # NB: L loads AND runs the program!
-    sport.queue_string(0.3, "L1foo\r")
-    # sport.queue_string(0.3, "S2000F5D5C53D0032D70FCD0E113D0006020E0216001E00210030CD8500F53AD70FCD4911F101CD0000\r")
-elif args.script:
-    print("Adding script", args.script)
-    sport.queue_string(0.3, args.script)
-# sport.queue_string(0.1, "D" + "1000" + "1010")
-
+print(config)
 
 # TODO: Hack since there is no clean way of failing if a non-existing disk is requested in the controller.
 # currently, the emulator just crashes. This adds some default images.
@@ -827,14 +848,38 @@ while len(d_imgs) < 8:
     print("Adding empty image", dname)
     d_imgs.append(diskimage.prog_make_test_img(dname))
 
+btypes = {
+    'dim-1001' : Board1001,
+    'dim-1003' : Board1003
+}
+btype = btypes[config['board']]
+board = btype(config)
 
-dsk = IODiskController(d_imgs)
-dsk.register_ports(io_ports)
+set_in_callback(io_in)
+set_out_callback(io_out)
+
+if args.script in ["t", "true"]:
+    # Add some strings to automate testing
+    # NB: no enter after this as it would abort it after the first line
+    board.sport.queue_string(0.1, "D" + "1000" + "1100")
+    # This one needs a "return" to work.
+    # NB: L loads AND runs the program!
+    board.sport.queue_string(0.3, "L1foo\r")
+    # sport.queue_string(0.3, "S2000F5D5C53D0032D70FCD0E113D0006020E0216001E00210030CD8500F53AD70FCD4911F101CD0000\r")
+elif args.script:
+    print("Adding script", args.script)
+    board.sport.queue_string(0.3, args.script)
+# sport.queue_string(0.1, "D" + "1000" + "1010")
+
 
 # Slightly hacky, but this lets us read from the serial port and put it in the
 # queue of the emulator's serial port.
-ch_in = open(args.ti, 'rb', 0)    # NB: need to set it to binary + unbuffered, otherwise terminal input will be buffered and not work properly
+# NB: need to set it to binary + unbuffered, otherwise terminal input will be buffered and not work properly
+ch_in = open(args.ti, 'rb', 0)    
 ch_in_p = select.poll()
 ch_in_p.register(ch_in.fileno(), select.POLLIN)
+
+# track cpm loading
+# z80emu.mem_set_track_mask(0xee00, 0xffff, z80emu.TRACK_EXEC)
 
 run_sim_stepmode()

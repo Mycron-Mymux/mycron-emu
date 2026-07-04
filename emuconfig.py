@@ -6,6 +6,12 @@ import pathlib
 def read_config(dname):
     cfname = pathlib.Path(dname, "config.txt")
     conf = dict()
+    
+    # Provide some defaults
+    conf['board'] = 'dim-1003'  
+    for k in ['prom0', 'prom1']:
+        conf[k] = ''
+    
     # TODO : consider using existing config parsers
     with open(cfname, 'r') as cf:
         for line in cf.readlines():
@@ -17,6 +23,7 @@ def read_config(dname):
 
     image_fnames = [str(p) for p in sorted(pathlib.Path(dname).glob("disk-??.img"))]
     conf['disk-images'] = image_fnames
+
     return conf
 
 

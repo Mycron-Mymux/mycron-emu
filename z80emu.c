@@ -502,6 +502,7 @@ PyMethodDef methods[] = {
     {"mem_set_prot", (PyCFunction) py_mem_set_prot, METH_VARARGS, "set protection of memory region. 0 = no protection, 1 = protected"},
     {"mem_dis", (PyCFunction) py_mem_dis, METH_VARARGS, "disassembly of instruction in running simulator's memory"},
     {"get_regs", (PyCFunction) py_get_regs, METH_VARARGS, "register dump/copy as a dictionary"},
+    // {"mem_set_track_mask", (PyCFunction) mem_set_track_mask
     {NULL},
 };
 
@@ -570,6 +571,9 @@ PyMODINIT_FUNC PyInit_z80emu(void)
     PyModule_AddIntConstant(module, "TRACK_WR",   TRACK_WR);
     PyModule_AddIntConstant(module, "TRACK_EXEC", TRACK_EXEC);
     // mem_set_track_mask(0, 0x1000, TRACK_WR);
+    // test for cpm loading
+    // mem_set_track_mask(0xee00, 0xffff, TRACK_EXEC);
+    mem_set_track_mask(0x9000, 0xffff, TRACK_EXEC);
     return module;
 }
 

@@ -1,0 +1,3 @@
+board : dim-1001
+prom0 : prom-sn32456.bin
+prom1 :
