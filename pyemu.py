@@ -810,7 +810,7 @@ class PromRegion:
         # store prom in emulator's memory
         for addr, val in enumerate(self.raw_data, start=self.start_addr):
             mem_wr(addr, val)
-        mem_set_prot(self.start_addr, self.start_addr + len(self) - 1, 1)
+        mem_set_prot(self.start_addr, self.start_addr + len(self), 1)
         self.is_on = True
         
     def turn_off(self):
@@ -818,7 +818,7 @@ class PromRegion:
         # overwrite prom region with RAM data
         for addr, val in enumerate(self.ram_vals, start=self.start_addr):
             mem_wr(addr, val)
-        mem_set_prot(self.start_addr, self.start_addr + len(self) -1, 0)
+        mem_set_prot(self.start_addr, self.start_addr + len(self), 0)
         self.is_on = False
 
     def save_ram(self, fname):

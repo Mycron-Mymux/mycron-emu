@@ -5,13 +5,12 @@ LD = gcc
 
 CFLAGS	= -Wall -O2 -fomit-frame-pointer -DLSB_FIRST -DDEBUG
 
-TARGS = z80lib z80emu.so
-
+TARGS = _z80emu_cffi.abi3.so
 
 all: $(TARGS)
 
 clean:
-	rm z80/*.o c-emu
+	rm -rf z80/*.o c-emu build
 
 # should create the z80 directory, extract the files and patch it
 z80: z80dist/fetch-z80.sh
@@ -20,7 +19,5 @@ z80: z80dist/fetch-z80.sh
 z80lib: z80
 	make -C z80
 
-
-z80emu.so: z80emu.c setup.py z80/Z80.o Makefile
-	python setup.py build	
-
+_z80emu_cffi.abi3.so: setup.py z80/Z80.o Makefile z80emu.py z80emu_build.py z80emu_core.c
+	python setup.py build_ext --inplace

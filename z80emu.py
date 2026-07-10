@@ -1,0 +1,220 @@
+#!/usr/bin/env python
+# Machine generated code that is slightly modified. 
+# z80emu.py
+
+import traceback
+from _z80emu_cffi import ffi, lib
+
+TRACK_NONE = 0
+TRACK_RD = 0x01
+TRACK_WR = 0x02
+TRACK_EXEC = 0x04
+
+_in_callback = None
+_out_callback = None
+
+
+@ffi.callback("unsigned char(unsigned char)")
+def _c_io_in(port):
+    global _in_callback
+
+    try:
+        port = int(port) & 0xff
+
+        if _in_callback is None:
+            print(f"Z80_In {port:02x}")
+            return 0
+
+        return int(_in_callback(port)) & 0xff
+
+    except Exception:
+        traceback.print_exc()
+        return 0
+
+
+@ffi.callback("void(unsigned char, unsigned char)")
+def _c_io_out(port, value):
+    global _out_callback
+
+    try:
+        port = int(port) & 0xff
+        value = int(value) & 0xff
+
+        if _out_callback is None:
+            print(f"Z80_Out {port:02x} <- {value:02x}")
+            return
+
+        _out_callback(port, value)
+
+    except Exception:
+        traceback.print_exc()
+
+lib.z80emu_set_io_callbacks(_c_io_in, _c_io_out)
+
+
+def reset():
+    lib.z80emu_reset()
+
+
+def step():
+    running = lib.z80emu_step()
+    pc = lib.z80emu_get_pc()
+    return int(running), int(pc)
+
+
+def run(n):
+    """
+    Compatibility wrapper.
+
+    Old API:
+
+        running, pc = z80emu.run(n)
+
+    This implementation calls C in chunks so Ctrl-C can still be noticed
+    reasonably often by Python.
+    """
+
+    n = int(n)
+
+    if n < 0:
+        raise ValueError("n must be >= 0")
+
+    # The old API says n=0 means indefinitely.
+    if n == 0:
+        while True:
+            running = lib.z80emu_run_steps(10_000)
+            pc = lib.z80emu_get_pc()
+
+            if not running:
+                return int(running), int(pc)
+
+    remaining = n
+    running = 1
+
+    while remaining > 0 and running:
+        chunk = min(remaining, 10_000)
+        running = lib.z80emu_run_steps(chunk)
+        remaining -= chunk
+
+    pc = lib.z80emu_get_pc()
+    return int(running), int(pc)
+
+
+def set_in_callback(cb):
+    global _in_callback
+
+    if cb is not None and not callable(cb):
+        raise TypeError("parameter must be callable or None")
+
+    _in_callback = cb
+
+
+def set_out_callback(cb):
+    global _out_callback
+
+    if cb is not None and not callable(cb):
+        raise TypeError("parameter must be callable or None")
+
+    _out_callback = cb
+
+
+def mem_rd(addr):
+    return int(lib.z80emu_mem_rd(int(addr) & 0xffff))
+
+
+def mem_wr(addr, val):
+    """
+    Debugger/backdoor memory write.
+
+    This bypasses memory protection, matching your old CPython extension.
+    Emulated CPU writes still go through C-side protection.
+    """
+
+    lib.z80emu_mem_wr(int(addr) & 0xffff, int(val) & 0xff)
+
+
+def mem_set_prot(start, end, val):
+    """
+    Set memory protection over [start, end).
+
+    0 = writable
+    nonzero = protected
+    """
+
+    lib.z80emu_mem_set_prot(
+        int(start) & 0xffff,
+        int(end),
+        int(val) & 0xff,
+    )
+
+
+def mem_set_track_mask(start, end, mask):
+    lib.z80emu_mem_set_track_mask(
+        int(start) & 0xffff,
+        int(end),
+        int(mask) & 0xff,
+    )
+
+
+def mem_unset_track_mask(start, end, mask):
+    lib.z80emu_mem_unset_track_mask(
+        int(start) & 0xffff,
+        int(end),
+        int(mask) & 0xff,
+    )
+
+
+def mem_dis(pc):
+    buf = ffi.new("char[120]")
+    n = lib.z80emu_mem_dis(int(pc) & 0xffff, buf, len(buf))
+    s = ffi.string(buf).decode("ascii", errors="replace")
+    return int(n), s
+
+
+def get_regs():
+    r = ffi.new("z80emu_regs_t *")
+    lib.z80emu_get_regs(r)
+
+    return {
+        "PC": int(r.PC),
+        "SP": int(r.SP),
+        "AF": int(r.AF),
+        "BC": int(r.BC),
+        "DE": int(r.DE),
+        "HL": int(r.HL),
+        "IX": int(r.IX),
+        "IY": int(r.IY),
+
+        "AF2": int(r.AF2),
+        "BC2": int(r.BC2),
+        "DE2": int(r.DE2),
+        "HL2": int(r.HL2),
+
+        "IFF1": int(r.IFF1),
+        "IFF2": int(r.IFF2),
+        "HALT": int(r.HALT),
+        "IM": int(r.IM),
+        "I": int(r.I),
+        "R": int(r.R),
+        "R2": int(r.R2),
+    }
+
+
+def raw_memory():
+    """
+    Returns a writable buffer view of the full 64 KiB memory.
+
+    Warning: this bypasses PROM/write protection.
+    Useful for debugging.
+    """
+
+    return ffi.buffer(lib.z80emu_memory(), 65536)
+
+
+def raw_memory_prot():
+    return ffi.buffer(lib.z80emu_memory_prot(), 65536)
+
+
+# Initialize on import, matching the old extension behavior.
+reset()
+
