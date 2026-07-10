@@ -88,15 +88,22 @@ void Z80_RegisterDump_oneline(void)
 
 
 // When using Z80_Exec, this is called after IPeriod T-STates
-// This might be a way of adding clock interrupts.
+// This might be a way of adding clock interrupts, but it appears
+// to be called periodically whether we need one or not.
+// May need to modify the z80 state if one is to be flagged,
+// and then the return value of this function should probably
+// be the interrupt vector (in IM 2).
 // TODO: callbacks to python?
+// TODO: log PC and potentially relevant flags
 int Z80_Interrupt(void)
 {
     if (trace_ops) {
         printf("Z80_interrupt: icount %4x iperiod %4x ", Z80_ICount, Z80_IPeriod);
         Z80_RegisterDump_oneline();
     }
+    // TODO: this just disables any interrupt handling as Interrupt in Z80.c just returns..
     return Z80_IGNORE_INT;
+    // return 0xff; 
 }
 
 // I/O calls a python callback (if present)
