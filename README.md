@@ -68,7 +68,7 @@ other to the terminal program.
 
 I'm just using minicom, but most should work. 
 
-    `minicom -D /dev/pty/<xxx> -b 9600`
+    `minicom -D /dev/pts/<xxx> -b 9600`
 
 There are some problems with some UTF characters crashing the emulator. 
 I haven't dug into this yet. 
@@ -79,6 +79,28 @@ that. I have had mixed results with running the apt version of
 cool-retro-term, but recomipiling the binary myself seemed to work
 better (incorrect draing of window backgrounds, for instance).
 
+
+### Using the python console
+
+A python console has been added to the emulator. 
+
+You can set up an extra set of ptys using another socat command like above. 
+
+The emulator can then be pointed to one end of the pair using  the parameter
+`-ec /dev/pts/<one end>` to the emulator. 
+
+Then you can use `minicom -D /dev/pts/<other end>` to get access to a
+Python prompt.
+
+Other options include (if 77 is the "other end"): 
+- `socat - /dev/pts/77,raw,echo=0`
+- `rlwrap -a socat - /dev/pts/77,raw,echo=0`
+- tio 
+
+
+The rlwrap version is probably the one that comes closest to a normal
+Python console, although it is not a fully supported console with
+readline and tab completion.
 
 ### A run directory with prom dumps and diskette images
 

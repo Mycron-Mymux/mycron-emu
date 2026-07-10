@@ -184,6 +184,8 @@ void Z80_WRMEM(dword A, byte V)
 // Set memory protection for a region
 void mem_set_protect(dword start, dword end, byte V)
 {
+    printf("Setting memory protection for region 0x%x to 0x%x to %d\n", start, end, V);
+    fflush(stdout);
     for (dword a = start; a <= end; a++) {
 	memory_prot[a] = V; 
     }
@@ -428,9 +430,11 @@ py_mem_set_prot(PyObject* self, PyObject* args)
     unsigned long start;
     unsigned long end;
     unsigned long val;
+
     if (!PyArg_ParseTuple(args, "lll", &start, &end, &val)) {
         return NULL;
     }
+
     mem_set_protect(start, end, val);
 
     Py_INCREF(Py_None);
@@ -491,17 +495,17 @@ py_get_regs(PyObject* self, PyObject* args)
     
 
 PyMethodDef methods[] = {
-    {"tst", (PyCFunction) pytst, METH_O, tst_doc},
-    {"dis", (PyCFunction) pydis, METH_VARARGS, dis_doc},
-    {"step", (PyCFunction) pystep, METH_NOARGS, pystep_doc},
-    {"run", (PyCFunction) pyrun, METH_VARARGS, pyrun_doc},
-    {"set_in_callback", (PyCFunction) py_set_in_callback, METH_VARARGS, "set in_port callback"},
+    {"tst",  (PyCFunction) pytst,  METH_O,       tst_doc},
+    {"dis",  (PyCFunction) pydis,  METH_VARARGS, dis_doc},
+    {"step", (PyCFunction) pystep, METH_NOARGS,  pystep_doc},
+    {"run",  (PyCFunction) pyrun,  METH_VARARGS, pyrun_doc},
+    {"set_in_callback",  (PyCFunction) py_set_in_callback,  METH_VARARGS, "set in_port callback"},
     {"set_out_callback", (PyCFunction) py_set_out_callback, METH_VARARGS, "set out_port callback"},
-    {"mem_rd", (PyCFunction) py_mem_rd, METH_VARARGS, "read mem from running simulator"},
-    {"mem_wr", (PyCFunction) py_mem_wr, METH_VARARGS, "write to running simulator's memory"},
-    {"mem_set_prot", (PyCFunction) py_mem_set_prot, METH_VARARGS, "set protection of memory region. 0 = no protection, 1 = protected"},
-    {"mem_dis", (PyCFunction) py_mem_dis, METH_VARARGS, "disassembly of instruction in running simulator's memory"},
-    {"get_regs", (PyCFunction) py_get_regs, METH_VARARGS, "register dump/copy as a dictionary"},
+    {"mem_rd",           (PyCFunction) py_mem_rd,           METH_VARARGS, "read mem from running simulator"},
+    {"mem_wr",           (PyCFunction) py_mem_wr,           METH_VARARGS, "write to running simulator's memory"},
+    {"mem_set_prot",     (PyCFunction) py_mem_set_prot,     METH_VARARGS, "set protection of memory region. 0 = no protection, 1 = protected"},
+    {"mem_dis",          (PyCFunction) py_mem_dis,          METH_VARARGS, "disassembly of instruction in running simulator's memory"},
+    {"get_regs",         (PyCFunction) py_get_regs,         METH_VARARGS, "register dump/copy as a dictionary"},
     // {"mem_set_track_mask", (PyCFunction) mem_set_track_mask
     {NULL},
 };
@@ -548,8 +552,8 @@ void init_memory()
     memset(memory_track, TRACK_NONE, MEM_SIZE);
     // read_file("prom0.bin", 0); 
     // read_file("prom1.bin", 0x1000);
-    mem_set_protect(0, MONITOR_SIZE - 1, 1);
-    mem_set_protect(0x1000,  0x1000 + MONITOR_SIZE - 1, 1);
+    // mem_set_protect(0, MONITOR_SIZE - 1, 1);
+    // mem_set_protect(0x1000,  0x1000 + MONITOR_SIZE - 1, 1);
 }
 
 

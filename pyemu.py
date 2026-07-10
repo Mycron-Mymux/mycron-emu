@@ -29,6 +29,7 @@ import z80emu
 from z80emu import step, set_in_callback, set_out_callback, mem_dis, mem_rd, mem_wr, get_regs, mem_set_prot
 import diskimage
 from emuconfig import read_config
+from embedded_console import start_pty_console
 
 
 # TODO: make a more flexible thing that can optionally write to a pty for output and also read from it
@@ -136,11 +137,9 @@ class IOP14(IODevice):
         print(f"IO14_OUT [{port:02x}] = {val:02x}")
         match val & 0x1:
             case 0:
-                print(" -- NB: removing write protech for PROM chips (simulating turning off chips)")
-                set_monitor_protect(False)
+                board.proms_off()
             case 1:
-                print(" -- NB: setting write protech for PROM chips")
-                set_monitor_protect(True)
+                board.proms_on()
 
     def read(self, port):
         print(f"IO14_INP [{port:02x}] : 0x{self.default_rval:x}")
@@ -710,13 +709,19 @@ def run_step(prev_pc):
     return pc
 
 
-def set_monitor_protect(protected=True):
-    PROM_SIZE=2048
-    pval = int(protected)
-    print(f"Setting memory protection for monitor to {pval}")
-    mem_set_prot(0, PROM_SIZE-1, pval)
-    mem_set_prot(0x1000, 0x1000 + PROM_SIZE - 1, pval)
+# Used to pause and continue the simulator.
+sim_paused = False
 
+def sim_pause():
+    global sim_paused
+    sim_paused = True
+    print("Sim paused")
+
+def sim_cont():
+    global sim_paused
+    sim_paused = False
+    print("Sim continued")
+    
 
 def run_sim_stepmode():
     global tstart
@@ -724,7 +729,7 @@ def run_sim_stepmode():
     # use_steps = True
     
     if use_steps:
-        set_monitor_protect(0)
+        print("TODO: ... turn off protection for proms in single step mode?")
 
     # Start running simulator
     N = 3_550_000
@@ -745,6 +750,9 @@ def run_sim_stepmode():
 
     if use_steps:
         while True:
+            if sim_paused:
+                time.sleep(1)
+                continue
             prev_pc = run_step(prev_pc)
     else:
         # TODO: this has a few issues. Python needs to run sometimes and
@@ -754,19 +762,72 @@ def run_sim_stepmode():
         # inside a C ext? Maybe the PyErr_CheckSignals() call is enough.
         # TODO: (move else where) - delayed print since we don't flush everywhere?. 
         while True:
+            if sim_paused:
+                time.sleep(1)
+                continue
             check_console()
             z80emu.run(1000)
             # z80emu.run(0)
 
 
-def add_prom(start_addr, fname):
-    """Adds a PROM image starting at start_addr.
-    """
-    print(f"Adding prom at {start_addr:04x} : {fname}")
-    pbytes = open(fname, "rb").read()
-    for offset, b in enumerate(pbytes):
-        mem_wr(start_addr + offset, b)
+def dump_mem(fname):
+    """TODO: this function could be more optimized"""
+    was_paused = sim_paused
+    print(f"Dumping memory to {fname}. Pausing simulator.")
+    sim_pause()
+    with open(fname, "wb") as f:
+        vals = [mem_rd(addr) for addr in range(0x10000)]
+        mem = bytes(vals)
+        f.write(mem)
+    print(f" - done dumping memory to {fname}. Restoring pause state of simulator.")
+    if not was_paused:
+        sim_cont()
 
+
+class PromRegion:
+    def __init__(self, fname, start_addr):
+        self.fname = fname
+        self.start_addr = start_addr
+        self.raw_data = open(fname, 'rb').read()
+        self.ram_vals = [0] * len(self.raw_data)
+        self.is_on = False
+        self.turn_on()
+
+    def __len__(self):
+        return len(self.raw_data)
+
+    def addr_range(self):
+        return range(self.start_addr, self.start_addr + len(self))
+
+    def _update_ramview(self):
+        if not self.is_on:
+            # Only store new ram values if the prom was off
+            self.ram_vals = [mem_rd(addr) for addr in self.addr_range()]
+
+    def turn_on(self):
+        """Turn on PROM, hiding RAM. Also protects prom region from writes."""
+        self._update_ramview()
+        # store prom in emulator's memory
+        for addr, val in enumerate(self.raw_data, start=self.start_addr):
+            mem_wr(addr, val)
+        mem_set_prot(self.start_addr, self.start_addr + len(self), 1)
+        self.is_on = True
+        
+    def turn_off(self):
+        """Turn off PROM, exposing RAM. Unprotects region."""
+        # overwrite prom region with RAM data
+        for addr, val in enumerate(self.ram_vals, start=self.start_addr):
+            mem_wr(addr, val)
+        mem_set_prot(self.start_addr, self.start_addr + len(self), 0)
+        self.is_on = False
+
+    def save_ram(self, fname):
+        print(f"Saving RAM (covered by PROM) from addr {self.start_addr} as {fname}")
+        self._update_ramview()
+        with open(fname, 'wb') as f:
+            f.write(bytes(self.ram_vals))
+        
+        
 
 class Board:
     btypes = {}
@@ -774,6 +835,16 @@ class Board:
         self.config = config
         # Set up I/O address space
         self.io_ports = defaultdict(IOPrint)
+        self.proms = []
+
+    def proms_on(self):
+        print(" -- NB: Turning on PROM chips")
+        for prom in self.proms:
+            prom.turn_on()
+    def proms_off(self):
+        print(" -- NB: Turning OFF PROM chips")
+        for prom in self.proms:
+            prom.turn_off()
 
 
 class Board1001(Board):
@@ -783,7 +854,8 @@ class Board1001(Board):
         self.sport.register_ports(self.io_ports)
 
         # Dim 1001 uses only one prom chip.
-        add_prom(     0, Path(args.c, config['prom0']))
+        self.proms.append(PromRegion(Path(args.c, config['prom0']), 0x0))
+        self.proms_on()
 
         # TODO: this probably won't work yet.
         # The disk controller appears to be mapped to the same ports
@@ -815,8 +887,9 @@ class Board1003(Board):
         self.iop14.register_ports(self.io_ports)
 
         # Dim 1003 uses two proms. The second one is mapped at 0x1000, leaving a region of RAM between the chips.
-        add_prom(     0, Path(args.c, config['prom0']))
-        add_prom(0x1000, Path(args.c, config['prom1']))
+        self.proms.append(PromRegion(Path(args.c, config['prom0']), 0x0))
+        self.proms.append(PromRegion(Path(args.c, config['prom1']), 0x1000))
+        self.proms_on()
         
         self.dsk = IODiskController(d_imgs)
         self.dsk.register_ports(self.io_ports)
@@ -829,6 +902,7 @@ parser.add_argument("-to", help="Console output")
 parser.add_argument("-script", help="Script to send to the console input.")
 # parser.add_argument("--disk", nargs='+')
 parser.add_argument("-c", default="run-tst", help="Config directory path (and where disk images are stored)")
+parser.add_argument("-ec", help="path to connect embedded python console to")
 args = parser.parse_args()
 
 if args.t:
@@ -878,6 +952,11 @@ elif args.script:
 ch_in = open(args.ti, 'rb', 0)    
 ch_in_p = select.poll()
 ch_in_p.register(ch_in.fileno(), select.POLLIN)
+
+# If embedded console: 
+if args.ec:
+    # Give it everything
+    console_server = start_pty_console(args.ec, globals())
 
 # track cpm loading
 # z80emu.mem_set_track_mask(0xee00, 0xffff, z80emu.TRACK_EXEC)
