@@ -692,13 +692,15 @@ def dbtrace(prev_pc, r, pc):
 def check_console():
     # Keyboard / Console input
     if (plist := ch_in_p.poll(0)):
-        ch = ch_in.read(1)
+        # The console doesn't like 8-bit ascii, so limit it to 7-bit.
+        ch = chr(ord(ch_in.read(1)) & 0x7f)
         # print("Got poll", plist, ch)
         if ch == "\r":
             print("YES, GOT cr")
         if ch == "\n":
             ch = "\r"  # doesn't expect newline...
-        board.sport.queue_string(0.01, ch.decode("UTF-8"))
+        # board.sport.queue_string(0.01, ch.decode("UTF-8"))
+        board.sport.queue_string(0.01, ch)
 
             
 def run_step(prev_pc):
