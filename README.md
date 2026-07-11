@@ -2,11 +2,7 @@ Mycron emulator
 ================
 
 This is an emulator for the Mycro-1 computer with the Z80 CPU and
-PROMs from the DIM-1003 CPU card.
-
-It may be possible to emulate the earlier DIM-1001 CPU card that uses
-the i8080 CPU, but that would require some modifications to only load
-one PROM region. This is not tested.
+PROMs from the DIM-1001 (i8080) and DIM-1003 (Z-80) CPU card.
 
 The emulator is written as a tool for exploring and understanding the
 Mycron computers, so it is not quite turn-key. It shouldn't be too
@@ -18,53 +14,27 @@ add Mycron support to other existing emulators that are capable of
 emulating similar systems like the Altair.
 
 
-
 ## Compiling the Z-80 library
 
-The z-80 library uses a z-80 emulator that is found here: 
-
-- https://www.komkon.org/~dekogel/misc.html
-- https://www.komkon.org/~dekogel/files/misc/z80em.zip
-
-I have tried contacting the author about including a modified version
-of the source code in this repository, but the e-mail address doesn't
-appear to work any more due to a missing MX for the domain
-(apparently).
-
-Until I find a better solution, a shell script is included here to
-download the library from the web page and patch it before make can
-continue.
-
-All of this should be handled by the makefile and the script 
-included in the z80dist/ directory. 
-
-To compile the project on a Linux box (tested on Ubuntu 24.04): 
-
-- run make
-- make a symbolic link to the compiled emulator library: 
-  `ln -s build/lib.linux-x86_64-cpython-312/z80emu.cpython-312-x86_64-linux-gnu.so z80emu.so`
-  
-The reason for the last manual step is that the makefile only runs
-setup.py build and not install. This has just been a manual workaround
-for me so far. A cleaner method is considered TODO material. 
-
-**Update 2026-07-11**: I have moved over to using z80ex as the z80
-emulator. This fixes some interrupt issues, and I'm now able to boot
-and load CP/M. I'm also using cffi to help bridge Python and C.
-
-To install z80ex on Unbuntu, it should be enough to run: 
+The emulator uses z80ex to emulate the Z80 CPU. To bridge the C
+library and the Python code, I'm using cffi. To install both on
+Ubuntu, you can use:
 
 ```
-sudo apt install libz80ex-dev
+sudo apt install libz80ex-dev python3-cffi
+```
+
+On some systems, you may need to fetch z80ex and cffi through other means. 
+It should be possible to install cffi with pip: 
 
 ```
- 
-If you you need to install cffi, one of the following should work:
-```
-sudo apt install python3-cffi
 pip install cffi 
 ```
 
+To compile the project on a Linux box (tested on Ubuntu 26.04), just run: 
+```
+make
+```
 
 ## Using the emulator
 
@@ -77,12 +47,12 @@ I'm using the following:
     `socat -d -d pty,rawer,echo=0 pty,rawer,echo=0`
 
 This should print out the device names of the two ends of the two-way
-pipeline that is provided. Provide one of them to the emulator and the
+pipe that is provided. Provide one of them to the emulator and the
 other to the terminal program.
 
 ### A serial communication program
 
-I'm just using minicom, but most should work. 
+I'm just using minicom, but other programs should work. 
 
     `minicom -D /dev/pts/<xxx> -b 9600`
 
@@ -92,15 +62,16 @@ I haven't dug into this yet.
 If you want a nice and cozy feeling while playing with the emulator,
 it may be an idea to look into cool-retro-term and run minicom inside
 that. I have had mixed results with running the apt version of
-cool-retro-term, but recomipiling the binary myself seemed to work
-better (incorrect draing of window backgrounds, for instance).
+cool-retro-term (incorrect draing of window backgrounds, for
+instance), but recompiling the binary myself seemed to work better.
 
 
 ### Using the python console
 
 A python console has been added to the emulator. 
 
-You can set up an extra set of ptys using another socat command like above. 
+You can set up an extra set of ptys using another socat similar to the
+method used for the Mycron console above.
 
 The emulator can then be pointed to one end of the pair using  the parameter
 `-ec /dev/pts/<one end>` to the emulator. 

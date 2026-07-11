@@ -9,10 +9,7 @@
 #include <stdlib.h>
 
 #include <z80ex/z80ex.h>
-
-// TODO: see if the z80ex disassembler can be used instead.
-// Keep using the existing disassembler for now.
-#include "z80/Z80Dasm.h"
+#include <z80ex/z80ex_dasm.h>
 
 typedef unsigned char byte;
 
@@ -74,6 +71,40 @@ void z80emu_set_io_callbacks(z80emu_in_cb_t in_cb, z80emu_out_cb_t out_cb)
     cb_io_out = out_cb;
 }
 
+// -------------------- z80ex dasm --------------------
+
+static Z80EX_BYTE emu_dasm_readbyte_cb(Z80EX_WORD addr, void *user_data)
+{
+    (void)user_data;
+    return memory[addr & 0xffff];
+}
+
+
+static int emu_disasm(unsigned int pc, char *out, unsigned long out_size)
+{
+    int t_states = 0;
+    int t_states2 = 0;
+
+    pc &= 0xffff;
+
+    if (out_size == 0) {
+        return 0;
+    }
+
+    out[0] = '\0';
+
+    return z80ex_dasm(
+        out,
+        (int)out_size,
+        0,                  // flags: 0 = default hex formatting
+        &t_states,
+        &t_states2,
+        emu_dasm_readbyte_cb,
+        (Z80EX_WORD)pc,
+        NULL
+    );
+}
+
 
 // -------------------- z80ex callbacks --------------------
 
@@ -99,7 +130,7 @@ static Z80EX_BYTE emu_mread_cb(
         }
 
         char txt[120];
-        Z80_Dasm(&memory[pc], txt, pc);
+        emu_disasm(pc, txt, sizeof(txt)); 
 
         printf("RD %04x -> %02x pc %04x instr: %s\n",
                a,
@@ -133,7 +164,7 @@ static void emu_mwrite_cb(
         }
 
         char txt[120];
-        Z80_Dasm(&memory[pc], txt, pc);
+        emu_disasm(pc, txt, sizeof(txt)); 
 
         printf("WR %04x : %02x -> %02x pc %04x instr: %s\n",
                a,
@@ -273,7 +304,7 @@ unsigned long z80emu_step(void)
 
     if (memory_track[pc] & TRACK_EXEC) {
         char txt[120];
-        Z80_Dasm(&memory[pc], txt, pc);
+        emu_disasm(pc, txt, sizeof(txt)); 
 
         printf("TRACK_EXEC: about to execute instruction at %04x: %s\n",
                pc,
@@ -385,16 +416,7 @@ void z80emu_mem_unset_track_mask(unsigned int start, unsigned int end, byte mask
 
 int z80emu_mem_dis(unsigned int pc, char *out, unsigned long out_size)
 {
-    pc &= 0xffff;
-
-    char txt[120];
-    int len = Z80_Dasm(&memory[pc], txt, pc);
-
-    if (out_size > 0) {
-        snprintf(out, out_size, "%s", txt);
-    }
-
-    return len;
+    return emu_disasm(pc, out, out_size);
 }
 
 

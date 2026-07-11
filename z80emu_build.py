@@ -86,14 +86,13 @@ ffibuilder.set_source(
 
     sources=[
         "z80emu_core_z80ex.c",
-        "z80/Z80Dasm.c",
     ],
     libraries=[
         "z80ex",
+        "z80ex_dasm",
     ],
     include_dirs=[
         ".",
-        "z80",
     ],
     extra_compile_args=extra_compile_args,
 )
