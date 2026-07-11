@@ -1,4 +1,7 @@
-// z80emu_core_z80ex.c
+/*
+ * z80emu_core_z80ex.c
+ * Note: ChatGPT did a major rewrite/reorg of this one to move it over to cffi and to use z80ex as a CPU emulator.
+ */ 
 
 #include <string.h>
 #include <stdio.h>
@@ -7,6 +10,7 @@
 
 #include <z80ex/z80ex.h>
 
+// TODO: see if the z80ex disassembler can be used instead.
 // Keep using the existing disassembler for now.
 #include "z80/Z80Dasm.h"
 
@@ -158,9 +162,9 @@ static Z80EX_BYTE emu_pread_cb(
     (void)user_data;
 
     /*
-       z80ex passes a 16-bit port.
-       The old emulator used only the low 8 bits.
-    */
+     *  z80ex passes a 16-bit port.
+     *  The old emulator used only the low 8 bits.
+     */
     byte p = port & 0xff;
 
     if (cb_io_in == NULL) {
@@ -203,10 +207,10 @@ static Z80EX_BYTE emu_intread_cb(
     (void)user_data;
 
     /*
-       IM 2: this is the vector byte.
-       IM 1: normally ignored.
-       IM 0: 0xff corresponds to RST 38h.
-    */
+     * IM 2: this is the vector byte.
+     * IM 1: normally ignored.
+     * IM 0: 0xff corresponds to RST 38h.
+     */
     return irq_vector;
 }
 
@@ -246,14 +250,6 @@ void z80emu_reset(void)
     }
 
     z80ex_reset(cpu);
-
-    /*
-       Preserve the old default tracking behavior.
-       Use half-open interval.
-    for (unsigned int a = 0x9000; a < 0x10000; a++) {
-        memory_track[a] |= TRACK_EXEC;
-    }
-    */
 }
 
 
@@ -285,17 +281,17 @@ unsigned long z80emu_step(void)
     }
 
     /*
-       If you want a level-triggered IRQ line, call z80ex_int while active.
-       z80ex_int() will only be accepted when the CPU state allows it.
-    */
+     *  If you want a level-triggered IRQ line, call z80ex_int while active.
+     *  z80ex_int() will only be accepted when the CPU state allows it.
+     */
     if (irq_line_active) {
         z80ex_int(cpu);
     }
 
     /*
-       z80ex_step returns elapsed T-states.
-       The old API used "running"; keep returning 1 for compatibility.
-    */
+     * z80ex_step returns elapsed T-states.
+     * The old API used "running"; keep returning 1 for compatibility.
+     */
     z80ex_step(cpu);
 
     return 1;
@@ -321,11 +317,11 @@ byte z80emu_mem_rd(unsigned int addr)
 
 
 /*
-   Debugger/backdoor write.
-
-   This bypasses protection, matching the previous py_mem_wr behavior.
-   CPU writes still go through z80ex_mwrite_cb and obey memory_prot.
-*/
+ * Debugger/backdoor write.
+ *
+ * This bypasses protection, matching the previous py_mem_wr behavior.
+ * CPU writes still go through z80ex_mwrite_cb and obey memory_prot.
+ */
 void z80emu_mem_wr(unsigned int addr, byte value)
 {
     memory[addr & 0xffff] = value;
@@ -335,11 +331,10 @@ void z80emu_mem_wr(unsigned int addr, byte value)
 void z80emu_mem_set_prot(unsigned int start, unsigned int end, byte value)
 {
     /*
-       Python-style half-open interval:
-
-           [start, end)
-    */
-
+     *  Python-style half-open interval:
+     *
+     *     [start, end)
+     */
     start &= 0xffff;
 
     if (end > MEM_SIZE) {

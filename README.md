@@ -48,6 +48,22 @@ The reason for the last manual step is that the makefile only runs
 setup.py build and not install. This has just been a manual workaround
 for me so far. A cleaner method is considered TODO material. 
 
+**Update 2026-07-11**: I have moved over to using z80ex as the z80
+emulator. This fixes some interrupt issues, and I'm now able to boot
+and load CP/M. I'm also using cffi to help bridge Python and C.
+
+To install z80ex on Unbuntu, it should be enough to run: 
+
+```
+sudo apt install libz80ex-dev
+
+```
+ 
+If you you need to install cffi, one of the following should work:
+```
+sudo apt install python3-cffi
+pip install cffi 
+```
 
 
 ## Using the emulator
@@ -92,7 +108,7 @@ The emulator can then be pointed to one end of the pair using  the parameter
 Then you can use `minicom -D /dev/pts/<other end>` to get access to a
 Python prompt.
 
-Other options include (if 77 is the "other end"): 
+Other options to connect to the console include (if 77 is the "other end"): 
 - `socat - /dev/pts/77,raw,echo=0`
 - `rlwrap -a socat - /dev/pts/77,raw,echo=0`
 - tio 
