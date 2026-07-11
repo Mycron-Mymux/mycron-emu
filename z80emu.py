@@ -31,6 +31,9 @@ def _c_io_in(port):
 
         return int(_in_callback(port)) & 0xff
 
+    except KeyboardInterrupt:
+        # re-trow since we need to stop the emulator
+        raise
     except Exception:
         traceback.print_exc()
         return 0
@@ -50,6 +53,9 @@ def _c_io_out(port, value):
 
         _out_callback(port, value)
 
+    except KeyboardInterrupt:
+        # re-trow since we need to stop the emulator
+        raise
     except Exception:
         traceback.print_exc()
 

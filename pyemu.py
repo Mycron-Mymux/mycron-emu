@@ -311,6 +311,7 @@ class DiskDrive:
         # when reading, positions in header or data
         self.hpos = -1
         self.dpos = -2
+        self.mark_seen_by_status = False
         self.set_at_state(True, False)   # Before first read, there is an address mark
         self.state = self.ST_INACTIVE
 
@@ -320,24 +321,48 @@ class DiskDrive:
 
     def start(self):
         """Called before first read of sector head or sector data"""
+        self.mark_seen_by_status = False
         match self.state:
             case self.ST_INACTIVE:
                 self.state = self.ST_HDR
                 self.set_at_state(True, False)
+
             case self.ST_HDR:
                 self.state = self.ST_DATA
                 # NB: Have to set the mark here as read_hdr doesn't try to consume bytes, it only waits for status.
                 # This is probably a side effect of the way the controller is observing the spinning disk and that they
                 # didn't use the same scan_start function for both parts. Old assembly coding....
                 self.set_at_state(True, False)
+
             case self.ST_DATA:
                 self.state = self.ST_INACTIVE
                 self.set_at_state(False, False)
 
+    def status_read(self):
+        # Called by the controller when STATUS is read.
+        # If the CPU has actually seen the address-mark bit, the next data read
+        # may return the mark byte.
+        if self.at_mark:
+            self.mark_seen_by_status = True
+            
     def done(self):
         return self.dpos > self.SECTOR_D_SIZE + 2
 
     def _read_header(self):
+        # DIM-1001 does:
+        #   IN DATA     ; dummy/prime read
+        #   IN STATUS   ; sees AM
+        #   IN DATA     ; expects FE
+        #
+        # DIM-1003 does:
+        #   IN STATUS   ; sees AM
+        #   IN DATA     ; expects FE
+        #
+        # Therefore, a data read before the AM status has been observed must not
+        # consume the FE header mark.
+        if self.hpos == -1 and self.at_mark and not self.mark_seen_by_status:
+            return 0
+
         self.hpos += 1
         # corresponds to the header part of budr
         match self.hpos:
@@ -625,13 +650,18 @@ class IODiskController(IODevice):
     # - always ready
     def _read_status(self):
         val = 0
+
         if self.track == 0:
             val |= self.STATUS_T0
+
         if self.drive is not None:
             if self.drive.at_mark:
                 val |= self.STATUS_AM
+                self.drive.status_read()
+                
             if self.drive.at_crc:
                 val |= self.STATUS_CRC
+
         val |= self.STATUS_DRY
         return val
 
