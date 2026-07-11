@@ -1,6 +1,7 @@
-// z80emu_core.c
-// Machine re-generated code (based on old library) that is slightly modified.
-
+/* z80emu_core.c
+ * This is based on the old z80 library for the emulator, but was re-written by chatgpt
+ * before I started editing again.
+ */
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -410,16 +411,5 @@ void z80emu_reset(void)
 
     Z80_Reset();
     z80_regs_ref = Z80_GetRegs_Ref();
-
-    /*
-       Preserve the current startup tracking behavior.
-
-       Original z80emu.c had:
-
-           mem_set_track_mask(0x9000, 0xffff, TRACK_EXEC);
-
-       Use half-open interval, so end should be 0x10000.
-    */
-    z80emu_mem_set_track_mask(0x9000, 0x10000, TRACK_EXEC);
 }
 
