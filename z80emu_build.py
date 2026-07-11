@@ -1,11 +1,17 @@
 #!/usr/bin/env python
 
-# z80emu_build.py
+"""
+z80emu_build.py
+
+This started out as machine generated code by ChatGPT.
+It helpted re-write the interface between the Z80-emulator and python to use cffi. 
+"""
 
 from cffi import FFI
 
 ffibuilder = FFI()
 
+# TODO: still not happy with this. Should perhaps read ths from a C include file instead.
 common_defs = """
 typedef unsigned char byte;
 
@@ -58,6 +64,9 @@ typedef void (*z80emu_out_cb_t)(byte port, byte value);
 
 void z80emu_set_io_callbacks(z80emu_in_cb_t in_cb, z80emu_out_cb_t out_cb);
 
+void z80emu_set_irq_line(int active, byte vector);
+int z80emu_pulse_irq(byte vector);
+int z80emu_nmi(void);
 """
 
 ffibuilder.cdef(common_defs)
@@ -76,9 +85,11 @@ ffibuilder.set_source(
     """ + common_defs, 
 
     sources=[
-        "z80emu_core.c",
-        "z80/Z80.c",
+        "z80emu_core_z80ex.c",
         "z80/Z80Dasm.c",
+    ],
+    libraries=[
+        "z80ex",
     ],
     include_dirs=[
         ".",

@@ -961,4 +961,7 @@ if args.ec:
 # track cpm loading
 # z80emu.mem_set_track_mask(0xee00, 0xffff, z80emu.TRACK_EXEC)
 
+# print("Trying to set track mask here")
+# z80emu.mem_set_track_mask(0x9000, 0x10000, z80emu.TRACK_EXEC)
+    
 run_sim_stepmode()

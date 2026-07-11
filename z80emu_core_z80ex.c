@@ -1,0 +1,500 @@
+// z80emu_core_z80ex.c
+
+#include <string.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+#include <z80ex/z80ex.h>
+
+// Keep using the existing disassembler for now.
+#include "z80/Z80Dasm.h"
+
+typedef unsigned char byte;
+
+#define MEM_SIZE (64 * 1024)
+
+static byte memory[MEM_SIZE];
+static byte memory_prot[MEM_SIZE];
+static byte memory_track[MEM_SIZE];
+
+enum Track_States {
+    TRACK_NONE = 0,
+    TRACK_RD   = 0x01,
+    TRACK_WR   = 0x02,
+    TRACK_EXEC = 0x04,
+};
+
+typedef struct {
+    unsigned int PC;
+    unsigned int SP;
+    unsigned int AF;
+    unsigned int BC;
+    unsigned int DE;
+    unsigned int HL;
+    unsigned int IX;
+    unsigned int IY;
+
+    unsigned int AF2;
+    unsigned int BC2;
+    unsigned int DE2;
+    unsigned int HL2;
+
+    unsigned int IFF1;
+    unsigned int IFF2;
+    unsigned int HALT;
+    unsigned int IM;
+    unsigned int I;
+    unsigned int R;
+    unsigned int R2;
+} z80emu_regs_t;
+
+
+typedef byte (*z80emu_in_cb_t)(byte port);
+typedef void (*z80emu_out_cb_t)(byte port, byte value);
+
+static z80emu_in_cb_t cb_io_in = NULL;
+static z80emu_out_cb_t cb_io_out = NULL;
+
+static Z80EX_CONTEXT *cpu = NULL;
+
+// Simple interrupt state.
+// For now, expose both "pulse IRQ once" and "hold IRQ line active".
+static int irq_line_active = 0;
+static byte irq_vector = 0xff;
+
+
+void z80emu_set_io_callbacks(z80emu_in_cb_t in_cb, z80emu_out_cb_t out_cb)
+{
+    cb_io_in = in_cb;
+    cb_io_out = out_cb;
+}
+
+
+// -------------------- z80ex callbacks --------------------
+
+static Z80EX_BYTE emu_mread_cb(
+    Z80EX_CONTEXT *cpu_arg,
+    Z80EX_WORD addr,
+    int m1_state,
+    void *user_data
+)
+{
+    (void)cpu_arg;
+    (void)m1_state;
+    (void)user_data;
+
+    unsigned int a = addr & 0xffff;
+    byte val = memory[a];
+
+    if (memory_track[a] & TRACK_RD) {
+        unsigned int pc = 0;
+
+        if (cpu) {
+            pc = z80ex_get_reg(cpu, regPC) & 0xffff;
+        }
+
+        char txt[120];
+        Z80_Dasm(&memory[pc], txt, pc);
+
+        printf("RD %04x -> %02x pc %04x instr: %s\n",
+               a,
+               val,
+               pc,
+               txt);
+    }
+
+    return val;
+}
+
+
+static void emu_mwrite_cb(
+    Z80EX_CONTEXT *cpu_arg,
+    Z80EX_WORD addr,
+    Z80EX_BYTE value,
+    void *user_data
+)
+{
+    (void)cpu_arg;
+    (void)user_data;
+
+    unsigned int a = addr & 0xffff;
+    byte v = value & 0xff;
+
+    if (memory_track[a] & TRACK_WR) {
+        unsigned int pc = 0;
+
+        if (cpu) {
+            pc = z80ex_get_reg(cpu, regPC) & 0xffff;
+        }
+
+        char txt[120];
+        Z80_Dasm(&memory[pc], txt, pc);
+
+        printf("WR %04x : %02x -> %02x pc %04x instr: %s\n",
+               a,
+               memory[a],
+               v,
+               pc,
+               txt);
+    }
+
+    if (memory_prot[a]) {
+        printf("WR---ignore write to protected addr %04x wr %02x\n", a, v);
+        return;
+    }
+
+    memory[a] = v;
+}
+
+
+static Z80EX_BYTE emu_pread_cb(
+    Z80EX_CONTEXT *cpu_arg,
+    Z80EX_WORD port,
+    void *user_data
+)
+{
+    (void)cpu_arg;
+    (void)user_data;
+
+    /*
+       z80ex passes a 16-bit port.
+       The old emulator used only the low 8 bits.
+    */
+    byte p = port & 0xff;
+
+    if (cb_io_in == NULL) {
+        printf("Z80_In %02x\n", p);
+        return 0;
+    }
+
+    return cb_io_in(p);
+}
+
+
+static void emu_pwrite_cb(
+    Z80EX_CONTEXT *cpu_arg,
+    Z80EX_WORD port,
+    Z80EX_BYTE value,
+    void *user_data
+)
+{
+    (void)cpu_arg;
+    (void)user_data;
+
+    byte p = port & 0xff;
+    byte v = value & 0xff;
+
+    if (cb_io_out == NULL) {
+        printf("Z80_Out %02x <- %02x\n", p, v);
+        return;
+    }
+
+    cb_io_out(p, v);
+}
+
+
+static Z80EX_BYTE emu_intread_cb(
+    Z80EX_CONTEXT *cpu_arg,
+    void *user_data
+)
+{
+    (void)cpu_arg;
+    (void)user_data;
+
+    /*
+       IM 2: this is the vector byte.
+       IM 1: normally ignored.
+       IM 0: 0xff corresponds to RST 38h.
+    */
+    return irq_vector;
+}
+
+// -------------------- public cffi API --------------------
+
+static void init_memory(void)
+{
+    memset(memory, 0, MEM_SIZE);
+    memset(memory_prot, 0, MEM_SIZE);
+    memset(memory_track, TRACK_NONE, MEM_SIZE);
+}
+
+
+void z80emu_reset(void)
+{
+    irq_line_active = 0;
+    irq_vector = 0xff;
+
+    init_memory();
+
+    if (cpu != NULL) {
+        z80ex_destroy(cpu);
+        cpu = NULL;
+    }
+
+    cpu = z80ex_create(
+        emu_mread_cb, NULL,
+        emu_mwrite_cb, NULL,
+        emu_pread_cb, NULL,
+        emu_pwrite_cb, NULL,
+        emu_intread_cb, NULL
+    );
+
+    if (cpu == NULL) {
+        fprintf(stderr, "z80ex_create failed\n");
+        abort();
+    }
+
+    z80ex_reset(cpu);
+
+    /*
+       Preserve the old default tracking behavior.
+       Use half-open interval.
+    for (unsigned int a = 0x9000; a < 0x10000; a++) {
+        memory_track[a] |= TRACK_EXEC;
+    }
+    */
+}
+
+
+unsigned int z80emu_get_pc(void)
+{
+    if (cpu == NULL) {
+        return 0;
+    }
+
+    return z80ex_get_reg(cpu, regPC) & 0xffff;
+}
+
+
+unsigned long z80emu_step(void)
+{
+    if (cpu == NULL) {
+        z80emu_reset();
+    }
+
+    unsigned int pc = z80emu_get_pc();
+
+    if (memory_track[pc] & TRACK_EXEC) {
+        char txt[120];
+        Z80_Dasm(&memory[pc], txt, pc);
+
+        printf("TRACK_EXEC: about to execute instruction at %04x: %s\n",
+               pc,
+               txt);
+    }
+
+    /*
+       If you want a level-triggered IRQ line, call z80ex_int while active.
+       z80ex_int() will only be accepted when the CPU state allows it.
+    */
+    if (irq_line_active) {
+        z80ex_int(cpu);
+    }
+
+    /*
+       z80ex_step returns elapsed T-states.
+       The old API used "running"; keep returning 1 for compatibility.
+    */
+    z80ex_step(cpu);
+
+    return 1;
+}
+
+
+unsigned long z80emu_run_steps(unsigned long n)
+{
+    unsigned long running = 1;
+
+    for (unsigned long i = 0; i < n && running; i++) {
+        running = z80emu_step();
+    }
+
+    return running;
+}
+
+
+byte z80emu_mem_rd(unsigned int addr)
+{
+    return memory[addr & 0xffff];
+}
+
+
+/*
+   Debugger/backdoor write.
+
+   This bypasses protection, matching the previous py_mem_wr behavior.
+   CPU writes still go through z80ex_mwrite_cb and obey memory_prot.
+*/
+void z80emu_mem_wr(unsigned int addr, byte value)
+{
+    memory[addr & 0xffff] = value;
+}
+
+
+void z80emu_mem_set_prot(unsigned int start, unsigned int end, byte value)
+{
+    /*
+       Python-style half-open interval:
+
+           [start, end)
+    */
+
+    start &= 0xffff;
+
+    if (end > MEM_SIZE) {
+        end = MEM_SIZE;
+    }
+
+    printf("Setting memory protection for region 0x%x to 0x%x to %d\n",
+           start,
+           end,
+           value);
+    fflush(stdout);
+
+    for (unsigned int a = start; a < end; a++) {
+        memory_prot[a] = value;
+    }
+}
+
+
+void z80emu_mem_set_track_mask(unsigned int start, unsigned int end, byte mask)
+{
+    start &= 0xffff;
+
+    if (end > MEM_SIZE) {
+        end = MEM_SIZE;
+    }
+
+    for (unsigned int a = start; a < end; a++) {
+        memory_track[a] |= mask;
+    }
+}
+
+
+void z80emu_mem_unset_track_mask(unsigned int start, unsigned int end, byte mask)
+{
+    start &= 0xffff;
+
+    if (end > MEM_SIZE) {
+        end = MEM_SIZE;
+    }
+
+    byte nmask = ~mask;
+
+    for (unsigned int a = start; a < end; a++) {
+        memory_track[a] &= nmask;
+    }
+}
+
+
+int z80emu_mem_dis(unsigned int pc, char *out, unsigned long out_size)
+{
+    pc &= 0xffff;
+
+    char txt[120];
+    int len = Z80_Dasm(&memory[pc], txt, pc);
+
+    if (out_size > 0) {
+        snprintf(out, out_size, "%s", txt);
+    }
+
+    return len;
+}
+
+
+void z80emu_get_regs(z80emu_regs_t *out)
+{
+    if (cpu == NULL) {
+        z80emu_reset();
+    }
+
+    memset(out, 0, sizeof(*out));
+
+    out->PC = z80ex_get_reg(cpu, regPC);
+    out->SP = z80ex_get_reg(cpu, regSP);
+
+    out->AF = z80ex_get_reg(cpu, regAF);
+    out->BC = z80ex_get_reg(cpu, regBC);
+    out->DE = z80ex_get_reg(cpu, regDE);
+    out->HL = z80ex_get_reg(cpu, regHL);
+
+    out->IX = z80ex_get_reg(cpu, regIX);
+    out->IY = z80ex_get_reg(cpu, regIY);
+
+    out->AF2 = z80ex_get_reg(cpu, regAF_);
+    out->BC2 = z80ex_get_reg(cpu, regBC_);
+    out->DE2 = z80ex_get_reg(cpu, regDE_);
+    out->HL2 = z80ex_get_reg(cpu, regHL_);
+
+    out->IFF1 = z80ex_get_reg(cpu, regIFF1);
+    out->IFF2 = z80ex_get_reg(cpu, regIFF2);
+    out->IM = z80ex_get_reg(cpu, regIM);
+
+    out->I = z80ex_get_reg(cpu, regI);
+    out->R = z80ex_get_reg(cpu, regR);
+
+    /*
+       z80ex has regR7 in many versions. If z80ex does not,
+       comment this out or set R2 to 0.
+    */
+#ifdef regR7
+    out->R2 = z80ex_get_reg(cpu, regR7);
+#else
+    out->R2 = 0;
+#endif
+
+    /*
+       z80ex does not always expose HALT as a regular register.
+       Leave as 0 for now unless the z80ex version provides it.
+    */
+    out->HALT = 0;
+}
+
+
+byte *z80emu_memory(void)
+{
+    return memory;
+}
+
+
+byte *z80emu_memory_prot(void)
+{
+    return memory_prot;
+}
+
+
+// -------------------- interrupt helpers --------------------
+
+void z80emu_set_irq_line(int active, byte vector)
+{
+    irq_line_active = active ? 1 : 0;
+    irq_vector = vector;
+}
+
+
+int z80emu_pulse_irq(byte vector)
+{
+    if (cpu == NULL) {
+        z80emu_reset();
+    }
+
+    irq_vector = vector;
+
+    /*
+       z80ex_int returns the number of T-states used by the interrupt
+       acknowledge sequence in many z80ex versions.
+    */
+    return z80ex_int(cpu);
+}
+
+
+int z80emu_nmi(void)
+{
+    if (cpu == NULL) {
+        z80emu_reset();
+    }
+
+    return z80ex_nmi(cpu);
+}
+
