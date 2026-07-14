@@ -787,6 +787,7 @@ def run_sim(N_STEPS=1000):
     N = 3_550_000
     tstart = time.time()
     z80emu.run_steps(N)
+    z80emu._raise_pending_callback_exception()
     tstop = time.time()
     print(f"Ran {N:_} steps in {tstop-tstart:.3f} seconds ({N/(tstop-tstart):_} steps/s)")
     sys.stdout.flush()
@@ -802,6 +803,7 @@ def run_sim(N_STEPS=1000):
             continue
         check_console()
         z80emu.run_steps(N_STEPS)
+        z80emu._raise_pending_callback_exception()
 
 
 def dump_mem(fname):
