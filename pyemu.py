@@ -142,13 +142,13 @@ class IOPrint(IODevice):
 # This port is "reverse enginered" from tracing signals on the DIM-1003 motherboard.
 # See the DIM-1003-mapping document for more details.
 # - 74S288 mapping of io address space to chip selects.
-# 
+#
 # There is a series of chips involved, but it boils down to:
 # - Writing a 1 to port 0x14 enables the PROM chips
 # - Writing a 0 to port 0x14 disables the PROM chips
 # - Writing a 2 to port 0x14 (bit 1) seems to do something related to signals, but
 #   I haven't observed this so far.
-# 
+#
 # Reading from port 0x14 has a different meaning: it reads the LS245 octal bus tranceiver
 # between the 8-bit dip switch and the CTC.
 #
@@ -156,17 +156,15 @@ class IOPrint(IODevice):
 # -> 9b would then mean switch  8+5+4+2+1 high. But I can't find the connections for pins 1-2, maybe something else than the dip switch.
 #    alternatively, the dip switches are grounded, so it may be a pull-up signal. Looks like there might be a resistor pack connected
 #    along the lines up to the input side of the port
-# 
+#
 # Observed behaviour:
-# 
+#
 # The monitor prom writes a 1 to it and then reads 0x9b.
 # - NYCPM (oja2 disk 08) writes a 0 here. Could this be disabling the PROMS!?
 #   NYCPM then hangs asking for a pascal diskette
 # - CPM on disk02 continuously writes 00 to that port, but doesn't seem to get further than that.
 # - BOOTCPM - same. Slightly different start. Also doesn't work properly.
-# 
-# TODO: unprotect the PROM memory when a 0 is written to this port 
-# 
+#
 class IOP14(IODevice):
     Ax14 = 0x14
     Ax15 = 0x15
@@ -191,7 +189,7 @@ class IOP14(IODevice):
         trace_write(f"IO14_INP [{port:02x}] : 0x{self.default_rval:x}", pc_offset=PC_OFFSET_STD_IO)
         return self.default_rval
 
-    
+
 class IOCTC(IOIgnore):
     """Counter/Timer
     Control word (from z80 CTC datasheet):
@@ -215,7 +213,7 @@ class IOCTC(IOIgnore):
     - D7-D3 - V7-V3 supplied by user
     - D2-D1 - Channel ident. Automatically inserted by CTC
     - D0 - (0 = interrupt vector word, 1 = control word)
-    
+
     """
     CH0 = 0x0
     CH1 = 0x2
@@ -257,9 +255,9 @@ class IOPar(IOIgnore):
 # - one byte with D2-D0 selecting a register
 # - the next byte with the value for the register
 # z80 peripherals page 293 (of 330)
-#     
-    
-    
+#
+
+
 class IOSerial(IODevice):
     """Serial ports on the DIM-1003.
     Not sure what port A is used for or whether it is actually used.
@@ -301,7 +299,7 @@ class IOSerial(IODevice):
                 self.next_reg[self.BC] = 0
         else:
             self.next_reg[self.BC] = 0
-        
+
 
     def write(self, port, val):
         """Emulate a write to a console"""
@@ -337,15 +335,15 @@ class IOSerial(IODevice):
         print(f"WARNING ({self}): unknown port {port} ... ports are {self.ALL=} {self.BD=} {self.BC=} {pc_disasm_str()}")
         return 0
 
-                
+
 class IOSerialDim1001(IOSerial):
     # The serial port for the console on DIM 1001 uses a different UART and different ports.
     BC = 1
     BD = 0
     ALL = [BC, BD]
-    
 
-                
+
+
 class DiskDrive:
     # Based on dim-1030 info
     SECTOR_D_SIZE = 128
@@ -400,7 +398,7 @@ class DiskDrive:
         # may return the mark byte.
         if self.at_mark:
             self.mark_seen_by_status = True
-            
+
     def done(self):
         return self.dpos > self.SECTOR_D_SIZE + 2
 
@@ -659,7 +657,7 @@ class IODiskController(IODevice):
 
     # When trying to set down head, it might try hex: 41, 51, 71, 51, then 01 when it gives up.
     # The last nibble 1 is for drive 1.
-    # This is where the controller seelcts which disk to work with for the next commands. 
+    # This is where the controller seelcts which disk to work with for the next commands.
     # CW2 writes. 50, 70, 50 -> step d1,  60, 40 ->  step d0
     def write_cw2(self, val):
         self.drive_no = val & 7
@@ -714,7 +712,7 @@ class IODiskController(IODevice):
             if self.drive.at_mark:
                 val |= self.STATUS_AM
                 self.drive.status_read()
-                
+
             if self.drive.at_crc:
                 val |= self.STATUS_CRC
 
@@ -737,7 +735,7 @@ class IODiskController(IODevice):
             case self.I_DATA:
                 val = self._read_data()
         if self.verbose:
-            trace_write(f"DSK_INP {pre:10} [{port:02x}] : {hex(val):6}", 
+            trace_write(f"DSK_INP {pre:10} [{port:02x}] : {hex(val):6}",
                         include_stack, pc_offset=PC_OFFSET_STD_IO)
         return val
 
@@ -748,29 +746,6 @@ def io_in(port):
 
 def io_out(port, val):
     board.io_ports[port].write(port, val)
-
-
-def dbtrace(prev_pc, r, pc):
-    # if pc == 0x34c:
-    #     print(f"TTIO: pc {prev_pc:x}->{pc:x}")
-    if (pc > 0x2000 or prev_pc > 0x2000) and pc < 0x2100:
-        trace_write(f"{prev_pc:04x} -> {pc:04x}", include_stack=True)
-        if pc in [0x1042, 0x105d]:
-            # Verify start of LOAD - BC has pointer to filename
-            regs, regs_s = regs_str()
-            bcmem = [hex(mem_rd(regs['BC'] + i)) for i in range(10)]
-            print("DSK_LOAD_Entry", regs_s, bcmem)
-        if pc in [0x107a]:
-            bcmem1 = [hex(mem_rd(regs['DE'] + i)) for i in range(10)]
-            bcmem2 = [hex(mem_rd(regs['HL'] + i)) for i in range(10)]
-            print("DSK_LOAD_CHCMP", regs_s, bcmem1, bcmem2)
-        if pc in [0x2000, 0x3000]:
-            bcmem1 = [hex(mem_rd(0x3000 + i)) for i in range(32)]
-            bcmem2 = [hex(mem_rd(0x4000 + i)) for i in range(32)]
-            print("PROGDUMP CODE", bcmem1)
-            print("PROGDUMP DATA", bcmem2)
-        if 0x2000 <= pc <= 0x2100:
-            print('step: ', regs_stack_str())
 
 
 def check_console():
@@ -785,14 +760,6 @@ def check_console():
             ch = "\r"  # doesn't expect newline...
         # board.sport.queue_string(0.01, ch.decode("UTF-8"))
         board.sport.queue_string(0.01, ch)
-
-            
-def run_step(prev_pc):
-    check_console()
-    r, pc = step()
-    if 0:
-        dbtrace(prev_pc, r, pc)
-    return pc
 
 
 # Used to pause and continue the simulator.
@@ -818,12 +785,12 @@ def sim_paused_context():
         yield
     finally:
         if old_state:
-            # was paused already...  
+            # was paused already...
             # sim_pause()
             ...
         else:
             sim_cont()
-    
+
 
 def run_sim(N_STEPS=1000):
     """Starts the simulator
@@ -844,7 +811,7 @@ def run_sim(N_STEPS=1000):
     # Polling once in a while works though.
     # ^C out of the proam doesn't work reliably. Something to do with running
     # inside a C ext? Maybe the PyErr_CheckSignals() call is enough.
-    # TODO: (move else where) - delayed print since we don't flush everywhere?. 
+    # TODO: (move else where) - delayed print since we don't flush everywhere?.
     while True:
         if sim_paused:
             time.sleep(1)
@@ -857,9 +824,8 @@ def dump_mem(fname):
     """Write a memory dump to a file"""
     print(f"Dumping memory to {fname}. Pausing simulator.")
     with sim_paused_context():
-        with open(fname, "wb") as f:
-            mem = z80emu.ffi.buffer(z80emu.lib.z80emu_memory(), z80emu.Z80_MEM_SIZE)
-            f.write(mem)
+        mem = z80emu.ffi.buffer(z80emu.lib.z80emu_memory(), z80emu.Z80_MEM_SIZE)
+        Path(fname).write_bytes(mem)
         print(f" - done dumping memory to {fname}. Restoring pause state of simulator.")
 
 
@@ -895,25 +861,23 @@ class PromRegion:
 
     def turn_on(self):
         """Turn on PROM, hiding RAM. Also protects prom region from writes."""
-        # If RAM was active, store the old RAM values
+        # If RAM was active, store the old RAM values.
         self._write_region(self.raw_data, backup=not self.is_on, protect=1)
         self.is_on = True
-        
+
     def turn_off(self):
         """Turn off PROM, exposing RAM. Unprotects region."""
-        # overwrite prom region with RAM data
-        self._write_region(self.ram_vals, backup=True, protect=0)
+        # Overwrite prom region with RAM data. Make sure PROM contents are not stored in RAM copy.
+        self._write_region(self.ram_vals, backup=False, protect=0)
         self.is_on = False
 
     def save_ram(self, fname):
         """Store dump of region as it looks now into a file"""
         print(f"Saving RAM (covered by PROM) from addr {self.start_addr} as {fname}")
-        # Trick: update ram_vals by  making a "write" with no data
+        # Trick: update ram_vals by making a "write" with no data
         self._write_region(None, backup=True)
-        with open(fname, 'wb') as f:
-            f.write(self.ram_vals)
-        
-        
+        Path(fname).write_bytes(self.ram_vals)
+
 
 class Board:
     btypes = {}
@@ -976,11 +940,11 @@ class Board1003(Board):
         self.proms.append(PromRegion(Path(args.c, config['prom0']), 0x0))
         self.proms.append(PromRegion(Path(args.c, config['prom1']), 0x1000))
         self.proms_on()
-        
+
         self.dsk = IODiskController(d_imgs)
         self.dsk.register_ports(self.io_ports)
 
-    
+
 parser = argparse.ArgumentParser()
 parser.add_argument("-t", help="Console I/O. Use if input and output are to the same device.")
 parser.add_argument("-ti", help="Console input")
@@ -1003,17 +967,14 @@ print(config)
 # currently, the emulator just crashes. This adds some default images.
 print("Using disk image(s) from", config['disk-images'])
 d_imgs = [diskimage.DiskImage.from_file(dname) for dname in config['disk-images']]
-while len(d_imgs) < 8:
-    dname = pathlib.Path(args.c) / f"disk-{len(d_imgs):02}.img"
-    print("Adding empty image", dname)
-    d_imgs.append(diskimage.prog_make_test_img(dname))
+d_imgs += [diskimage.prog_make_test_img( pathlib.Path(args.c) / f"disk-{i:02}.img")
+           for  i in range(len(d_imgs),8)]
 
 btypes = {
     'dim-1001' : Board1001,
     'dim-1003' : Board1003
 }
-btype = btypes[config['board']]
-board = btype(config)
+board = btypes[config['board']](config)
 
 set_in_callback(io_in)
 set_out_callback(io_out)
@@ -1035,16 +996,16 @@ elif args.script:
 # Slightly hacky, but this lets us read from the serial port and put it in the
 # queue of the emulator's serial port.
 # NB: need to set it to binary + unbuffered, otherwise terminal input will be buffered and not work properly
-ch_in = open(args.ti, 'rb', 0)    
+ch_in = open(args.ti, 'rb', 0)
 ch_in_p = select.poll()
 ch_in_p.register(ch_in.fileno(), select.POLLIN)
 
-# If embedded console: 
+# If embedded console:
 if args.ec:
     # Give it everything
     console_server = start_pty_console(args.ec, globals())
 
 # track cpm loading
 # z80emu.mem_set_track_mask(0xee00, 0xffff, z80emu.TRACK_EXEC)
-    
+
 run_sim()
