@@ -10,45 +10,13 @@
 
 #include <z80ex/z80ex.h>
 #include <z80ex/z80ex_dasm.h>
-
-typedef unsigned char byte;
+#include "z80emu_core.h"
 
 #define MEM_SIZE (64 * 1024)
 
 static byte memory[MEM_SIZE];
 static byte memory_prot[MEM_SIZE];
 static byte memory_track[MEM_SIZE];
-
-enum Track_States {
-    TRACK_NONE = 0,
-    TRACK_RD   = 0x01,
-    TRACK_WR   = 0x02,
-    TRACK_EXEC = 0x04,
-};
-
-typedef struct {
-    unsigned int PC;
-    unsigned int SP;
-    unsigned int AF;
-    unsigned int BC;
-    unsigned int DE;
-    unsigned int HL;
-    unsigned int IX;
-    unsigned int IY;
-
-    unsigned int AF2;
-    unsigned int BC2;
-    unsigned int DE2;
-    unsigned int HL2;
-
-    unsigned int IFF1;
-    unsigned int IFF2;
-    unsigned int HALT;
-    unsigned int IM;
-    unsigned int I;
-    unsigned int R;
-    unsigned int R2;
-} z80emu_regs_t;
 
 
 typedef byte (*z80emu_in_cb_t)(byte port);

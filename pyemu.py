@@ -58,6 +58,23 @@ def regs_stack_str():
     return s
 
 
+def pc_disasm_str():
+    """
+    Return a short string with current PC and disassembly at PC.
+
+    Note: during an IN/OUT callback, depending on the Z80 backend, PC may
+    already point at the next instruction rather than the IN/OUT instruction.
+    Still useful for context.
+    """
+    try:
+        regs = get_regs()
+        pc = regs["PC"] & 0xffff
+        nbytes, asm = mem_dis(pc)
+        return f"PC={pc:04x} {asm}"
+    except Exception as e:
+        return f"PC=???? <disasm failed: {e}>"
+
+
 class IODevice:
     ALL = []
     def __init__(self, default_rval=0):
@@ -86,10 +103,10 @@ class IOPrint(IODevice):
     a write is requested.
     Additionally prints OUT and INP to the console for debugging."""
     def write(self, port, val):
-        print(f"OUT [{port:02x}] = {val:02x}")
+        print(f"OUT [{port:02x}] = {val:02x}   {pc_disasm_str()}")
 
     def read(self, port):
-        print(f"INP [{port:02x}] : 0x{self.default_rval:x}")
+        print(f"INP [{port:02x}] : 0x{self.default_rval:x}   {pc_disasm_str()}")
         return self.default_rval
 
 
@@ -280,6 +297,10 @@ class IOSerial(IODevice):
                     c = self.s[0]
                     self.s = self.s[1:]
                     return ord(c)
+                print(f"WARNING: trying to read data fra empty serial port at io port {port}. Returning 0 {pc_disasm_str()}")
+                return 0
+        print(f"WARNING ({self}): unknown port {port} ... ports are {self.ALL=} {self.BD=} {self.BC=} {pc_disasm_str()}")
+        return 0
 
                 
 class IOSerialDim1001(IOSerial):

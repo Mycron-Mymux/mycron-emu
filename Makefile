@@ -12,5 +12,5 @@ all: $(TARGS)
 clean:
 	rm -rf build _z80*.so
 
-_z80emu_cffi.abi3.so: setup.py z80/Z80.o Makefile z80emu.py z80emu_build.py z80emu_core_z80ex.c
+_z80emu_cffi.abi3.so: setup.py Makefile z80emu.py z80emu_build.py z80emu_core_z80ex.c z80emu_core.h
 	python setup.py build_ext --inplace

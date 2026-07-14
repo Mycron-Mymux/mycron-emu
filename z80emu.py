@@ -8,11 +8,7 @@
 
 import traceback
 from _z80emu_cffi import ffi, lib
-
-TRACK_NONE = 0
-TRACK_RD = 0x01
-TRACK_WR = 0x02
-TRACK_EXEC = 0x04
+from _z80emu_cffi.lib import TRACK_NONE, TRACK_RD, TRACK_WR, TRACK_EXEC
 
 _in_callback = None
 _out_callback = None
