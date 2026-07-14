@@ -22,6 +22,7 @@ import time
 import sys
 import select
 from collections import defaultdict
+from contextlib import contextmanager
 import pathlib
 from pathlib import Path
 import argparse
@@ -31,16 +32,29 @@ import diskimage
 from emuconfig import read_config
 from embedded_console import start_pty_console
 
+# most instructions of the type  IN A, OUT A should be 2 bytes.
+# This should cover most io cases
+PC_OFFSET_STD_IO = -2
 
 # TODO: make a more flexible thing that can optionally write to a pty for output and also read from it
 USE_PTY = True
 
 
-def regs_str():
+def dict_subset(d, keys):
+    """Yields (key, value) from a subset of the dict defined by 'keys'.
+    Silently skips keys that are not present.
+    """
+    for k in keys:
+        if k in d:
+            yield k, d
+
+def regs_str(regs=None):
     """Returns a regsn and a string rep of regs with hex values"""
-    regs = get_regs()
+    rnames = ['PC', 'SP', 'AF', 'BC', 'DE', 'HL']
+    if regs is None:
+        regs = get_regs
     s = "REGS_hex("
-    for k, v in regs.items():
+    for k, v in dict_subset(regs, rnames):
         s += f"{k}={v:x},"
     s += ")"
     return (regs, s)
@@ -48,31 +62,46 @@ def regs_str():
 
 def regs_stack_str():
     regs = get_regs()
-    s = "REGS_hex("
-    for rn in ['PC', 'SP', 'AF', 'BC', 'DE', 'HL']:
-        s += f"{rn}={regs[rn]:4x},"
-    s += ") Stack: ["
+    s = regs_str(regs)
     sp = regs['SP']
+    s += "Stack: ["
     s += " ".join([f"{mem_rd(sp + i):02x}" for i in range(10)])
     s += "]"
     return s
 
 
-def pc_disasm_str():
+def pc_disasm_str(pc_offset=0):
     """
     Return a short string with current PC and disassembly at PC.
 
     Note: during an IN/OUT callback, depending on the Z80 backend, PC may
     already point at the next instruction rather than the IN/OUT instruction.
     Still useful for context.
+
+    To address this, you can add pc_offset=PC_OFFSET_STD_IO, which should address
+    most cases.
     """
     try:
         regs = get_regs()
-        pc = regs["PC"] & 0xffff
+        pc = (regs["PC"] + pc_offset) & 0xffff
+        offs = "" if pc_offset is 0 else f" PC offset {pc_offset}"
         nbytes, asm = mem_dis(pc)
-        return f"PC={pc:04x} {asm}"
+        return f"PC={pc:04x} {asm:14}{offs}"
     except Exception as e:
         return f"PC=???? <disasm failed: {e}>"
+
+
+def trace_write(msg, include_regs=False, include_stack=False, pc_offset=0):
+    """Trace write..
+    NB: see notes about pc_disasm_str(). It might return the _next_ instruction.
+    """
+    s = f"{msg} {pc_disasm_str(pc_offset)}"
+    if include_stack:
+        # also includes regs
+        s += "  " + regs_stack_str()
+    elif include_regs:
+        s += "  " + regs_str()
+    print(s)
 
 
 class IODevice:
@@ -103,10 +132,10 @@ class IOPrint(IODevice):
     a write is requested.
     Additionally prints OUT and INP to the console for debugging."""
     def write(self, port, val):
-        print(f"OUT [{port:02x}] = {val:02x}   {pc_disasm_str()}")
+        trace_write(f"OUT [{port:02x}] = {val:02x}", pc_offset=PC_OFFSET_STD_IO)
 
     def read(self, port):
-        print(f"INP [{port:02x}] : 0x{self.default_rval:x}   {pc_disasm_str()}")
+        trace_write(f"INP [{port:02x}] : 0x{self.default_rval:x}", pc_offset=PC_OFFSET_STD_IO)
         return self.default_rval
 
 
@@ -151,7 +180,7 @@ class IOP14(IODevice):
         print(f"IO14 device initialized with default rval={self.default_rval:#x}. TODO: see comments.")
 
     def write(self, port, val):
-        print(f"IO14_OUT [{port:02x}] = {val:02x}")
+        trace_write(f"IO14_OUT [{port:02x}] = {val:02x}", pc_offset=PC_OFFSET_STD_IO)
         match val & 0x1:
             case 0:
                 board.proms_off()
@@ -159,7 +188,7 @@ class IOP14(IODevice):
                 board.proms_on()
 
     def read(self, port):
-        print(f"IO14_INP [{port:02x}] : 0x{self.default_rval:x}")
+        trace_write(f"IO14_INP [{port:02x}] : 0x{self.default_rval:x}", pc_offset=PC_OFFSET_STD_IO)
         return self.default_rval
 
     
@@ -195,13 +224,13 @@ class IOCTC(IOIgnore):
     ALL = [CH0, CH1, CH2, CH3]
 
     def write(self, port, val):
-        print(f"IOCTC OUT [{port:02x}] = {val:02x}")
+        trace_write(f"IOCTC OUT [{port:02x}] = {val:02x}", pc_offset=PC_OFFSET_STD_IO)
         if val & 0x1:
             # control
             if val & 0x80:
                 print("-- NB: wanted interrupt")
     def read(self, port):
-        print(f"IOCTC INP [{port:02x}] : 0x{self.default_rval:x}")
+        trace_write(f"IOCTC INP [{port:02x}] : 0x{self.default_rval:x}", pc_offset=PC_OFFSET_STD_IO)
         return self.default_rval
 
 
@@ -214,9 +243,9 @@ class IOPar(IOIgnore):
     ALL = [AC, AD, BC, BD]
 
     def write(self, port, val):
-        print(f"IOPAR OUT [{port:02x}] = {val:02x}")
+        trace_write(f"IOPAR OUT [{port:02x}] = {val:02x}", pc_offset=PC_OFFSET_STD_IO)
     def read(self, port):
-        print(f"IOPAR INP [{port:02x}] : 0x{self.default_rval:x}")
+        trace_write(f"IOPAR INP [{port:02x}] : 0x{self.default_rval:x}", pc_offset=PC_OFFSET_STD_IO)
         return self.default_rval
 
 
@@ -255,6 +284,25 @@ class IOSerial(IODevice):
     def queue_string(self, at, s):
         self.queue.append([at, s])
 
+
+    def _write_serial_ctrl(self, port, val):
+        """Emulate write to console serial port's ctrl register"""
+        # A bit clumsy as a first take on the register write sequences
+        # This is incomplete and is just there to detect if something interesting is set up on the serial channel.
+        if val != 0 or self.next_reg[self.BC] > 0:
+            # 0 is typically used when polling
+            trace_write(f"IOSER  OUT[{port:2x}] = {val:2x},  ser_BC reg was {self.next_reg[self.BC]:2x}: ", pc_offset=PC_OFFSET_STD_IO)
+            # print(f"IOSER write CB reg {self.next_reg[self.BC]} - {port:2x} {val:2x}")
+            if self.next_reg[self.BC] == 0:
+                if val & 0x7 > 0:
+                    # print(f"IOSER --- next reg is {val&0x7}")
+                    self.next_reg[self.BC] = val & 0x7
+            else:
+                self.next_reg[self.BC] = 0
+        else:
+            self.next_reg[self.BC] = 0
+        
+
     def write(self, port, val):
         """Emulate a write to a console"""
         match port:
@@ -266,20 +314,7 @@ class IOSerial(IODevice):
                     with open(args.to, 'w') as f:
                         f.write(chr(val))
             case self.BC:
-                # A bit clumsy as a first take on the register write sequences
-                # This is incomplete and is just there to detect if something interesting is set up on the serial channel.
-                if val != 0 or self.next_reg[self.BC] > 0:
-                    # 0 is typically used when polling
-                    print(f"IOSER write CB reg {self.next_reg[self.BC]} - {port:2x} {val:2x}")
-                    if self.next_reg[self.BC] == 0:
-                        if val & 0x7 > 0:
-                            # print(f"IOSER --- next reg is {val&0x7}")
-                            self.next_reg[self.BC] = val & 0x7
-                    else:
-                        self.next_reg[self.BC] = 0
-                else:
-                    self.next_reg[self.BC] = 0
-                ...
+                self._write_serial_ctrl(port, val)
 
     def read(self, port):
         tnow = time.time() - tstart
@@ -430,7 +465,7 @@ class DiskDrive:
         if self.dpos == 0:
             # Make sure there is a freshly read sector here (to enable swapping disks)
             # TODO: could perhaps just move this to "start"
-            print(f"RD_SECTOR dsk={self.dno} sector {self.track:02}.{self.sector:02}")
+            print(f"RD_SECTOR dsk={self.dno} sector {self.track:02}.{self.sector:02} .. {pc_disasm_str(PC_OFFSET_STD_IO)}")
             self.data = self.disk_img.read_sector(self.track, self.sector)
 
         if self.dpos < self.SECTOR_D_SIZE:
@@ -442,7 +477,7 @@ class DiskDrive:
             self.dpos += 1
             if self.dpos == self.SECTOR_D_SIZE:
                 self.set_at_state(False, True)
-                # print(f"DSK_READ_SECT_COMPLETE {self.track:02}.{self.sector:02} : {self.data}")
+                # print(f"DSK_READ_SECT_COMPLETE {self.track:02}.{self.sector:02} : {self.data} {pc_disasm_str(PC_OFFSET_STD_IO)}")
             return ret
 
         # TODO: potential for infinite loop, but prom seems to start a new read after crc
@@ -661,10 +696,10 @@ class IODiskController(IODevice):
                     ...
                     # print(f"WRITE_ODATA state {self.wr_state} not {self.WR_ST_DATA}  {port=:#x} {val=:#x} - probably ok (prewrite stage)")
             case _:
-                print(f"DSK_WRITE_unknown: {port=:#x} {val=:#x}")
-        st += f"{self.rd_state} wstate {self.wr_state} T={self.track} S={self.sector}  {self.drive_no} {regs_stack_str()}"
+                print(f"DSK_WRITE_unknown: {port=:#x} {val=:#x} {pc_disasm_str(PC_OFFSET_STD_IO)}")
+        st += f"{self.rd_state} wstate {self.wr_state} T={self.track} S={self.sector}  {self.drive_no}"
         if self.verbose:
-            print(st)
+            trace_write(st, include_stack=True, pc_offset=PC_OFFSET_STD_IO)
 
     # A few simplifications compared to a real drive:
     # - instant track move and time to next pos
@@ -702,7 +737,8 @@ class IODiskController(IODevice):
             case self.I_DATA:
                 val = self._read_data()
         if self.verbose:
-            print(f"DSK_INP {pre:10} [{port:02x}] : {hex(val):6} {regs_stack_str()}")
+            trace_write(f"DSK_INP {pre:10} [{port:02x}] : {hex(val):6}", 
+                        include_stack, pc_offset=PC_OFFSET_STD_IO)
         return val
 
 
@@ -718,10 +754,7 @@ def dbtrace(prev_pc, r, pc):
     # if pc == 0x34c:
     #     print(f"TTIO: pc {prev_pc:x}->{pc:x}")
     if (pc > 0x2000 or prev_pc > 0x2000) and pc < 0x2100:
-        s = ""
-        # s = regs_str()[1]
-        s += regs_stack_str()
-        print(f"{prev_pc:04x} -> {pc:04x} {str(mem_dis(pc)):30} {s}")
+        trace_write(f"{prev_pc:04x} -> {pc:04x}", include_stack=True)
         if pc in [0x1042, 0x105d]:
             # Verify start of LOAD - BC has pointer to filename
             regs, regs_s = regs_str()
@@ -774,111 +807,111 @@ def sim_cont():
     global sim_paused
     sim_paused = False
     print("Sim continued")
+
+
+@contextmanager
+def sim_paused_context():
+    """Safer handling of sim state"""
+    old_state = sim_paused
+    try:
+        sim_pause()
+        yield
+    finally:
+        if old_state:
+            # was paused already...  
+            # sim_pause()
+            ...
+        else:
+            sim_cont()
     
 
-def run_sim_stepmode():
+def run_sim(N_STEPS=1000):
+    """Starts the simulator
+    N_STEPS is how many steps the z80 C library should run before returning to Python
+    for another iteration. Too many steps means the console and some other functions
+    may become less responsive. Too few steps add overhead.
+    """
     global tstart
-    use_steps = False
-    # use_steps = True
-    
-    if use_steps:
-        print("TODO: ... turn off protection for proms in single step mode?")
-
     # Start running simulator
     N = 3_550_000
-    prev_pc = 0
     tstart = time.time()
-    if use_steps:
-        for i in range(N):
-            prev_pc = run_step(prev_pc)
-    else:
-        z80emu.run(N)
+    z80emu.run(N)
     tstop = time.time()
     print(f"Ran {N:_} steps in {tstop-tstart:.3f} seconds ({N/(tstop-tstart):_} steps/s)")
-    mem = [hex(mem_rd(p)) for p in range(0x0000, 0x0010)]
-    print("0x0000", mem)
-    mem = [hex(mem_rd(p)) for p in range(0x1000, 0x1010)]
-    print("0x1000", mem)
     sys.stdout.flush()
-
-    if use_steps:
-        while True:
-            if sim_paused:
-                time.sleep(1)
-                continue
-            prev_pc = run_step(prev_pc)
-    else:
-        # TODO: this has a few issues. Python needs to run sometimes and
-        # run_step also polls the console port.
-        # Polling once in a while works though.
-        # ^C out of the proam doesn't work reliably. Something to do with running
-        # inside a C ext? Maybe the PyErr_CheckSignals() call is enough.
-        # TODO: (move else where) - delayed print since we don't flush everywhere?. 
-        while True:
-            if sim_paused:
-                time.sleep(1)
-                continue
-            check_console()
-            z80emu.run(1000)
-            # z80emu.run(0)
+    # TODO: this has a few issues. Python needs to run sometimes and
+    # run_step also polls the console port.
+    # Polling once in a while works though.
+    # ^C out of the proam doesn't work reliably. Something to do with running
+    # inside a C ext? Maybe the PyErr_CheckSignals() call is enough.
+    # TODO: (move else where) - delayed print since we don't flush everywhere?. 
+    while True:
+        if sim_paused:
+            time.sleep(1)
+            continue
+        check_console()
+        z80emu.run(N_STEPS)
 
 
 def dump_mem(fname):
-    """TODO: this function could be more optimized"""
-    was_paused = sim_paused
+    """Write a memory dump to a file"""
     print(f"Dumping memory to {fname}. Pausing simulator.")
-    sim_pause()
-    with open(fname, "wb") as f:
-        vals = [mem_rd(addr) for addr in range(0x10000)]
-        mem = bytes(vals)
-        f.write(mem)
-    print(f" - done dumping memory to {fname}. Restoring pause state of simulator.")
-    if not was_paused:
-        sim_cont()
+    with sim_paused_context():
+        with open(fname, "wb") as f:
+            mem = z80emu.ffi.buffer(z80emu.lib.z80emu_memory(), z80emu.Z80_MEM_SIZE)
+            f.write(mem)
+        print(f" - done dumping memory to {fname}. Restoring pause state of simulator.")
 
 
 class PromRegion:
+    """Emulates PROM chips as well as the memory covering the same address space when PROM chips are turned off.
+    Some Z80 programs (like the CPM loaders) turn off the PROM region, leaving RAM to cover the same region.
+    The tricky thing is that some functions can flip the PROM back on and off again to temporarily run
+    support functions from the PROM.
+    This class handles the logic of emulating the PROM flipping by keeping track of both RAM and PROM data
+    and updating the memory view depending on the current PROM configuration.
+    """
     def __init__(self, fname, start_addr):
         self.fname = fname
         self.start_addr = start_addr
         self.raw_data = open(fname, 'rb').read()
-        self.ram_vals = [0] * len(self.raw_data)
+        self.ram_vals = bytes([0] * len(self.raw_data))
         self.is_on = False
         self.turn_on()
 
     def __len__(self):
         return len(self.raw_data)
 
-    def addr_range(self):
-        return range(self.start_addr, self.start_addr + len(self))
-
-    def _update_ramview(self):
-        if not self.is_on:
-            # Only store new ram values if the prom was off
-            self.ram_vals = [mem_rd(addr) for addr in self.addr_range()]
+    def _write_region(self, data, backup=False, protect=0):
+        """Writes data to the region, optionally storing the old values to self.ram_vals"""
+        mem = z80emu.ffi.buffer(z80emu.lib.z80emu_memory(), z80emu.Z80_MEM_SIZE)
+        rng = slice(self.start_addr, self.start_addr + len(self))
+        if backup:
+            self.ram_vals = mem[rng]
+        if data is not None:
+            # Only update memory and set protection if data is there. Used by save_ram
+            mem[rng] = data
+            mem_set_prot(self.start_addr, self.start_addr + len(self), protect)
 
     def turn_on(self):
         """Turn on PROM, hiding RAM. Also protects prom region from writes."""
-        self._update_ramview()
-        # store prom in emulator's memory
-        for addr, val in enumerate(self.raw_data, start=self.start_addr):
-            mem_wr(addr, val)
-        mem_set_prot(self.start_addr, self.start_addr + len(self), 1)
+        # If RAM was active, store the old RAM values
+        self._write_region(self.raw_data, backup=not self.is_on, protect=1)
         self.is_on = True
         
     def turn_off(self):
         """Turn off PROM, exposing RAM. Unprotects region."""
         # overwrite prom region with RAM data
-        for addr, val in enumerate(self.ram_vals, start=self.start_addr):
-            mem_wr(addr, val)
-        mem_set_prot(self.start_addr, self.start_addr + len(self), 0)
+        self._write_region(self.ram_vals, backup=True, protect=0)
         self.is_on = False
 
     def save_ram(self, fname):
+        """Store dump of region as it looks now into a file"""
         print(f"Saving RAM (covered by PROM) from addr {self.start_addr} as {fname}")
-        self._update_ramview()
+        # Trick: update ram_vals by  making a "write" with no data
+        self._write_region(None, backup=True)
         with open(fname, 'wb') as f:
-            f.write(bytes(self.ram_vals))
+            f.write(self.ram_vals)
         
         
 
@@ -1013,8 +1046,5 @@ if args.ec:
 
 # track cpm loading
 # z80emu.mem_set_track_mask(0xee00, 0xffff, z80emu.TRACK_EXEC)
-
-# print("Trying to set track mask here")
-# z80emu.mem_set_track_mask(0x9000, 0x10000, z80emu.TRACK_EXEC)
     
-run_sim_stepmode()
+run_sim()

@@ -24,25 +24,25 @@ Ubuntu, you can use:
 sudo apt install libz80ex-dev python3-cffi
 ```
 
-On some systems, you may need to fetch z80ex and cffi through other means. 
-It should be possible to install cffi with pip: 
+On some systems, you may need to fetch z80ex and cffi through other means.
+It should be possible to install cffi with pip:
 
 ```
-pip install cffi 
+pip install cffi
 ```
 
-To compile the project on a Linux box (tested on Ubuntu 26.04), just run: 
+To compile the project on a Linux box (tested on Ubuntu 26.04), just run:
 ```
 make
 ```
 
 ## Using the emulator
 
-Before starting the emulator, you need the following: 
+Before starting the emulator, you need the following:
 
 ### A method for setting up a virtual pty
 
-I'm using the following: 
+I'm using the following:
 
     `socat -d -d pty,rawer,echo=0 pty,rawer,echo=0`
 
@@ -52,12 +52,12 @@ other to the terminal program.
 
 ### A serial communication program
 
-I'm just using minicom, but other programs should work. 
+I'm just using minicom, but other programs should work.
 
     `minicom -D /dev/pts/<xxx> -b 9600`
 
-There are some problems with some UTF characters crashing the emulator. 
-I haven't dug into this yet. 
+There are some problems with some UTF characters crashing the emulator.
+I haven't dug into this yet.
 
 If you want a nice and cozy feeling while playing with the emulator,
 it may be an idea to look into cool-retro-term and run minicom inside
@@ -68,21 +68,21 @@ instance), but recompiling the binary myself seemed to work better.
 
 ### Using the python console
 
-A python console has been added to the emulator. 
+A python console has been added to the emulator.
 
 You can set up an extra set of ptys using another socat similar to the
 method used for the Mycron console above.
 
 The emulator can then be pointed to one end of the pair using  the parameter
-`-ec /dev/pts/<one end>` to the emulator. 
+`-ec /dev/pts/<one end>` to the emulator.
 
 Then you can use `minicom -D /dev/pts/<other end>` to get access to a
 Python prompt.
 
-Other options to connect to the console include (if 77 is the "other end"): 
+Other options to connect to the console include (if 77 is the "other end"):
 - `socat - /dev/pts/77,raw,echo=0`
 - `rlwrap -a socat - /dev/pts/77,raw,echo=0`
-- tio 
+- tio
 
 
 The rlwrap version is probably the one that comes closest to a normal
@@ -91,14 +91,14 @@ readline and tab completion.
 
 ### A run directory with prom dumps and diskette images
 
-A starting directory is provided in this project. 
-The idea is to move more of the config options to the config file 
+A starting directory is provided in this project.
+The idea is to move more of the config options to the config file
 included in the directory. This is on the TODO list.
 
-The main things that needs to be included here are: 
+The main things that needs to be included here are:
 
 - the config file
-- PROM dumps 
+- PROM dumps
 - diskette images (if you intend to use diskette simulation)
 
 
@@ -111,8 +111,4 @@ operation. The simplest way of simulating swapping a diskette is to
 just copy a file over the corresponding diskette image in the run
 directory.
 
-Disk images are named disk-00.img to disk-07.img. 
-
-
-
-
+Disk images are named disk-00.img to disk-07.img.
