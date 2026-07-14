@@ -27,7 +27,7 @@ import pathlib
 from pathlib import Path
 import argparse
 import z80emu
-from z80emu import step, set_in_callback, set_out_callback, mem_dis, mem_rd, mem_wr, get_regs, mem_set_prot
+from z80emu import set_in_callback, set_out_callback, mem_dis, mem_rd, mem_wr, get_regs, mem_set_prot
 import diskimage
 from emuconfig import read_config
 from embedded_console import start_pty_console
@@ -40,31 +40,22 @@ PC_OFFSET_STD_IO = -2
 USE_PTY = True
 
 
-def dict_subset(d, keys):
-    """Yields (key, value) from a subset of the dict defined by 'keys'.
-    Silently skips keys that are not present.
-    """
-    for k in keys:
-        if k in d:
-            yield k, d
-
 def regs_str(regs=None):
-    """Returns a regsn and a string rep of regs with hex values"""
+    """Returns a dict with regs and a string rep of regs with hex values"""
     rnames = ['PC', 'SP', 'AF', 'BC', 'DE', 'HL']
     if regs is None:
-        regs = get_regs
-    s = "REGS_hex("
-    for k, v in dict_subset(regs, rnames):
-        s += f"{k}={v:x},"
-    s += ")"
-    return (regs, s)
+        regs = get_regs()
+    vals = ",".join(
+        f"{name}={regs[name]:x}"
+        for name in rnames
+        if name in regs)
+    return (regs, f"REGS_hex({vals})")
 
 
 def regs_stack_str():
-    regs = get_regs()
-    s = regs_str(regs)
+    regs, s = regs_str()
     sp = regs['SP']
-    s += "Stack: ["
+    s += " Stack: ["
     s += " ".join([f"{mem_rd(sp + i):02x}" for i in range(10)])
     s += "]"
     return s
@@ -84,7 +75,7 @@ def pc_disasm_str(pc_offset=0):
     try:
         regs = get_regs()
         pc = (regs["PC"] + pc_offset) & 0xffff
-        offs = "" if pc_offset is 0 else f" PC offset {pc_offset}"
+        offs = "" if pc_offset == 0 else f" PC offset {pc_offset}"
         nbytes, asm = mem_dis(pc)
         return f"PC={pc:04x} {asm:14}{offs}"
     except Exception as e:
@@ -100,7 +91,7 @@ def trace_write(msg, include_regs=False, include_stack=False, pc_offset=0):
         # also includes regs
         s += "  " + regs_stack_str()
     elif include_regs:
-        s += "  " + regs_str()
+        s += "  " + regs_str()[1]
     print(s)
 
 
@@ -305,9 +296,8 @@ class IOSerial(IODevice):
         """Emulate a write to a console"""
         match port:
             case self.BD:
-                # Emulate write to console (sio B)
-                # print(chr(val), end="")
-                # sys.stdout.flush()
+                # Emulate write to console (sio B).
+                # The file name is supposed to point to a pipe, so we don't need 'wa'
                 if args.to:
                     with open(args.to, 'w') as f:
                         f.write(chr(val))
@@ -338,6 +328,7 @@ class IOSerial(IODevice):
 
 class IOSerialDim1001(IOSerial):
     # The serial port for the console on DIM 1001 uses a different UART and different ports.
+    # TODO: __init__ might reference parent vals
     BC = 1
     BD = 0
     ALL = [BC, BD]
@@ -679,7 +670,7 @@ class IODiskController(IODevice):
 
     def write(self, port, val):
         pre = self.pname(port)
-        st = f"DSK_OUT {pre:10} [{port:02x}] = {val:02x}.  rdstate {self.rd_state}->"
+        _org_rd_state = self.rd_state
         match port:
             # need two commands to start a read: 0x41 and then 0x49
             case self.O_CW1:
@@ -689,14 +680,11 @@ class IODiskController(IODevice):
             case self.O_DATA:
                 if self.wr_state == self.WR_ST_DATA:
                     self.drive.write_add_byte(val)
-                    # print(f"Writing byte to disk T={self.track} S={self.sector} val={val:02x}. Len of buf now {len(self.cur_sec.wbuf)}")
-                else:
-                    ...
-                    # print(f"WRITE_ODATA state {self.wr_state} not {self.WR_ST_DATA}  {port=:#x} {val=:#x} - probably ok (prewrite stage)")
             case _:
                 print(f"DSK_WRITE_unknown: {port=:#x} {val=:#x} {pc_disasm_str(PC_OFFSET_STD_IO)}")
-        st += f"{self.rd_state} wstate {self.wr_state} T={self.track} S={self.sector}  {self.drive_no}"
         if self.verbose:
+            st = f"DSK_OUT {pre:10} [{port:02x}] = {val:02x}.  rdstate {_org_rd_state}->"
+            st += f"{self.rd_state} wstate {self.wr_state} T={self.track} S={self.sector}  {self.drive_no}"
             trace_write(st, include_stack=True, pc_offset=PC_OFFSET_STD_IO)
 
     # A few simplifications compared to a real drive:
@@ -736,7 +724,7 @@ class IODiskController(IODevice):
                 val = self._read_data()
         if self.verbose:
             trace_write(f"DSK_INP {pre:10} [{port:02x}] : {hex(val):6}",
-                        include_stack, pc_offset=PC_OFFSET_STD_IO)
+                        include_stack=True, pc_offset=PC_OFFSET_STD_IO)
         return val
 
 
@@ -758,7 +746,6 @@ def check_console():
             print("YES, GOT cr")
         if ch == "\n":
             ch = "\r"  # doesn't expect newline...
-        # board.sport.queue_string(0.01, ch.decode("UTF-8"))
         board.sport.queue_string(0.01, ch)
 
 
@@ -784,11 +771,8 @@ def sim_paused_context():
         sim_pause()
         yield
     finally:
-        if old_state:
-            # was paused already...
-            # sim_pause()
-            ...
-        else:
+        if not old_state:
+            # should be un-paused
             sim_cont()
 
 
@@ -802,7 +786,7 @@ def run_sim(N_STEPS=1000):
     # Start running simulator
     N = 3_550_000
     tstart = time.time()
-    z80emu.run(N)
+    z80emu.run_steps(N)
     tstop = time.time()
     print(f"Ran {N:_} steps in {tstop-tstart:.3f} seconds ({N/(tstop-tstart):_} steps/s)")
     sys.stdout.flush()
@@ -812,12 +796,12 @@ def run_sim(N_STEPS=1000):
     # ^C out of the proam doesn't work reliably. Something to do with running
     # inside a C ext? Maybe the PyErr_CheckSignals() call is enough.
     # TODO: (move else where) - delayed print since we don't flush everywhere?.
-    while True:
+    while not z80emu.kbd_interrupted:
         if sim_paused:
             time.sleep(1)
             continue
         check_console()
-        z80emu.run(N_STEPS)
+        z80emu.run_steps(N_STEPS)
 
 
 def dump_mem(fname):
@@ -959,6 +943,10 @@ if args.t:
     # Use the same pty for both input and output
     args.ti = args.t
     args.to = args.t
+    
+if (not args.ti) or (not args.to):
+    print("You need to either specify -t (for combined console input/output)  or both -ti and -to")
+    exit(1)
 
 config = read_config(args.c)
 print(config)
