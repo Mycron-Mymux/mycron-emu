@@ -2,27 +2,30 @@
 
 import pathlib
 
-# TODO: maybe just use yaml or similar? 
+# TODO: maybe just use yaml or similar?
 def read_config(dname):
-    cfname = pathlib.Path(dname, "config.txt")
-    conf = dict()
-    
+    dname = pathlib.Path(dname)
     # Provide some defaults
-    conf['board'] = 'dim-1003'  
-    for k in ['prom0', 'prom1']:
-        conf[k] = ''
-    
-    # TODO : consider using existing config parsers
-    with open(cfname, 'r') as cf:
-        for line in cf.readlines():
-            line = line.strip().split('#')[0].strip()
-            if line.startswith("#") or ":" not in line:
-                continue
-            key, val = [v.strip() for v in line.split(":")]
-            conf[key] = val
+    conf = {
+        'board': 'dim-1003',
+        'prom0': '',
+        'prom1': '',
+    }
 
-    image_fnames = [str(p) for p in sorted(pathlib.Path(dname).glob("disk-??.img"))]
-    conf['disk-images'] = image_fnames
+    # TODO : consider using existing config parsers
+    with (dname / "config.txt").open() as cf:
+        for line in cf:
+            line = line.partition("#")[0].strip()
+            if not line:
+                continue
+            key, separator, value = line.partition(":")
+            if not separator:
+                continue
+            conf[key.strip()] = value.strip()
+
+    conf['disk-images'] = [
+        str(path)
+        for path in sorted(dname.glob("disk-??.img"))]
 
     return conf
 
@@ -30,4 +33,3 @@ def read_config(dname):
 if __name__ == "__main__":
     conf = read_config("run-tst")
     print(conf)
-    

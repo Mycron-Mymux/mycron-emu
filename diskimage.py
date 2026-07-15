@@ -50,7 +50,6 @@ prog_simple = bytes([
 ])
 prog_simple += bytes(128 - len(prog_simple))
 # text at 0x4000
-prog_simple_text = bytes("\n\rARMADILLOS INJECTED FORCEFULLY.\n\rBEWARE OF THE LEOPARD.\n\r", encoding="ascii")
 prog_simple_text = bytes("\n\rBEWARE OF THE LEOPARD.\n\r", encoding="ascii")
 prog_simple_text += bytes(128 - len(prog_simple_text))
 
@@ -84,23 +83,25 @@ def secno_to_ts(secno):
     sector = (secno % SECTORS) + 1
     return track, sector
 
-        
+
 class DiskImage:
-    READ_EVERY=True
+    DSK_READ = 0      # Every sector read opens the file (if present) and reads the sector from the file
+    DSK_BUFF = 0      # Sector reads copy from an internal buffer
+
     def __init__(self, fname, data):
         self.fname = fname
-        self.bdata = data
         self.barr = bytearray(data)
+        self._read_source = self.DSK_READ
 
     @classmethod
-    def empty_image(self, name="NA"):
-        return DiskImage(name, bytes(IMG_LEN))
+    def empty_image(cls, name="NA"):
+        return cls(name, bytes(IMG_LEN))
 
     @classmethod
     def from_file(cls, fname):
         data = open(fname, 'rb').read()
         assert len(data) == IMG_LEN
-        return DiskImage(fname, data)
+        return cls(fname, data)
 
     def save(self, fname=None):
         if fname is None:
@@ -113,7 +114,7 @@ class DiskImage:
         assert 1 <= sector <= SECTORS
         assert 0 <= track < TRACKS
         offset = ((track * SECTORS) + (sector - 1)) * SECTOR_SIZE
-        if self.READ_EVERY and os.path.isfile(self.fname):
+        if self._read_source == self.DSK_READ and os.path.isfile(self.fname):
             with open(self.fname, 'rb') as f:
                 f.seek(offset)
                 data = f.read(SECTOR_SIZE)
@@ -236,7 +237,7 @@ def data_make_empty_dir_entry():
 def prog_make_test_img(name="NA"):
     VOLID="PROGDUMMY"
     vol_sec = bytearray(bytes(VOLID + " " * (SECTOR_SIZE - len(VOLID)), encoding="ascii"))
-    img = DiskImage.empty_image(name)  
+    img = DiskImage.empty_image(name)
     for sno in [1, 2, 3, 4, 6]:
         img.write_sector(0, sno, empty_phdr_sec())
     ehdr = bytearray(empty_phdr_sec())

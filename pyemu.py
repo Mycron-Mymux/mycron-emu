@@ -23,11 +23,10 @@ import sys
 import select
 from collections import defaultdict
 from contextlib import contextmanager
-import pathlib
 from pathlib import Path
 import argparse
 import z80emu
-from z80emu import set_in_callback, set_out_callback, mem_dis, mem_rd, mem_wr, get_regs, mem_set_prot
+from z80emu import set_in_callback, set_out_callback, mem_dis, mem_rd, get_regs, mem_set_prot
 import diskimage
 from emuconfig import read_config
 from embedded_console import start_pty_console
@@ -35,9 +34,6 @@ from embedded_console import start_pty_console
 # most instructions of the type  IN A, OUT A should be 2 bytes.
 # This should cover most io cases
 PC_OFFSET_STD_IO = -2
-
-# TODO: make a more flexible thing that can optionally write to a pty for output and also read from it
-USE_PTY = True
 
 
 def regs_str(regs=None):
@@ -96,20 +92,19 @@ def trace_write(msg, include_regs=False, include_stack=False, pc_offset=0):
 
 
 class IODevice:
-    ALL = []
+    PORTS = []
     def __init__(self, default_rval=0):
         self.default_rval = default_rval
 
     def write(self, port, val):
-        ...
+        pass
 
     def read(self, port):
         return self.default_rval
 
-    def register_ports(self, port_registry, port_list=None):
+    def register_ports(self, port_registry, ports=None):
         """Register this io device to the port list in the class or the provided port list"""
-        lst = self.ALL if port_list is None else port_list
-        for p in lst:
+        for p in (self.PORTS if ports is None else ports):
             port_registry[p] = self
 
 
@@ -130,6 +125,7 @@ class IOPrint(IODevice):
         return self.default_rval
 
 
+# Port 0x14 on the Z80 cards.
 # This port is "reverse enginered" from tracing signals on the DIM-1003 motherboard.
 # See the DIM-1003-mapping document for more details.
 # - 74S288 mapping of io address space to chip selects.
@@ -144,37 +140,37 @@ class IOPrint(IODevice):
 # between the 8-bit dip switch and the CTC.
 #
 # Dip switch pins 3-8 are connected to an input buffer, corresponding to bit 2-7
-# -> 9b would then mean switch  8+5+4+2+1 high. But I can't find the connections for pins 1-2, maybe something else than the dip switch.
-#    alternatively, the dip switches are grounded, so it may be a pull-up signal. Looks like there might be a resistor pack connected
+# -> 9b would then mean switch  8+5+4+2+1 high. But I can't find the connections for pins 1-2,
+#    maybe something else than the dip switch.
+#    Alternatively, the dip switches are grounded, so it may be a pull-up signal.
+#    Looks like there might be a resistor pack connected
 #    along the lines up to the input side of the port
 #
 # Observed behaviour:
 #
 # The monitor prom writes a 1 to it and then reads 0x9b.
-# - NYCPM (oja2 disk 08) writes a 0 here. Could this be disabling the PROMS!?
-#   NYCPM then hangs asking for a pascal diskette
-# - CPM on disk02 continuously writes 00 to that port, but doesn't seem to get further than that.
-# - BOOTCPM - same. Slightly different start. Also doesn't work properly.
+# - The CPM boot programs write a 0 to this port to turn off the PROMS.
+# - There is a MYCROP.COM program on one of the CPM floppies that writes a 1 to this port and
+#   then jumps back to mycrop.
+# - Some of the CPM booting code temporarily turns on the PROMS to run support functions
+#   and then turns them off again.
 #
 class IOP14(IODevice):
     Ax14 = 0x14
     Ax15 = 0x15
     Ax16 = 0x16
     Ax17 = 0x17
-    ALL = [Ax14, Ax15, Ax16, Ax17]
+    PORTS = [Ax14, Ax15, Ax16, Ax17]
 
     # TODO: the default rval seems to influence the values written to IOCTC port 2: 80 with 9b, 20 with 1b
-    def __init__(self, default_rval=0x9b):
+    def __init__(self, board, default_rval=0x9b):
         super().__init__(default_rval=default_rval)
+        self.board = board
         print(f"IO14 device initialized with default rval={self.default_rval:#x}. TODO: see comments.")
 
     def write(self, port, val):
         trace_write(f"IO14_OUT [{port:02x}] = {val:02x}", pc_offset=PC_OFFSET_STD_IO)
-        match val & 0x1:
-            case 0:
-                board.proms_off()
-            case 1:
-                board.proms_on()
+        self.board.set_proms_enabled(val & 1)
 
     def read(self, port):
         trace_write(f"IO14_INP [{port:02x}] : 0x{self.default_rval:x}", pc_offset=PC_OFFSET_STD_IO)
@@ -210,7 +206,7 @@ class IOCTC(IOIgnore):
     CH1 = 0x2
     CH2 = 0x1
     CH3 = 0x3
-    ALL = [CH0, CH1, CH2, CH3]
+    PORTS = [CH0, CH1, CH2, CH3]
 
     def write(self, port, val):
         trace_write(f"IOCTC OUT [{port:02x}] = {val:02x}", pc_offset=PC_OFFSET_STD_IO)
@@ -229,7 +225,7 @@ class IOPar(IOIgnore):
     BD = 0x5   # Port B data
     AC = 0x6   # Port A control
     BC = 0x7   # Port B control
-    ALL = [AC, AD, BC, BD]
+    PORTS = [AC, AD, BC, BD]
 
     def write(self, port, val):
         trace_write(f"IOPAR OUT [{port:02x}] = {val:02x}", pc_offset=PC_OFFSET_STD_IO)
@@ -238,7 +234,8 @@ class IOPar(IOIgnore):
         return self.default_rval
 
 
-# TODO: generalize to support more UARTs / serial boards
+# TODO: generalize to support more UARTs / serial boards.
+# - Mymux needs a 4-port serial card for the multicomputer code.
 # The manual is a bit messy. You have to read through loads of stuff of how to do things before
 # it tells you how to read and write to the various registers. It would have been nice to know
 # that _before_ talking about the sequences of the registers.
@@ -247,8 +244,6 @@ class IOPar(IOIgnore):
 # - the next byte with the value for the register
 # z80 peripherals page 293 (of 330)
 #
-
-
 class IOSerial(IODevice):
     """Serial ports on the DIM-1003.
     Not sure what port A is used for or whether it is actually used.
@@ -258,10 +253,12 @@ class IOSerial(IODevice):
     BD = 0xe
     AC = 0xd
     AD = 0xc
-    ALL = [AC, AD, BC, BD]
+    PORTS = [AC, AD, BC, BD]
 
-    def __init__(self, **kvals):
+    def __init__(self, fname, **kvals):
         super().__init__(**kvals)
+        self.fname = fname
+        self.output = open(fname, 'wb', buffering=0)
         self.s = ""
         self.queue = []
         # next register to write if write-reg contains data pointers
@@ -269,6 +266,7 @@ class IOSerial(IODevice):
             self.AC: 0,
             self.BC: 0
         }
+        self.tstart = time.time()
 
     def queue_string(self, at, s):
         self.queue.append([at, s])
@@ -297,15 +295,14 @@ class IOSerial(IODevice):
         match port:
             case self.BD:
                 # Emulate write to console (sio B).
-                # The file name is supposed to point to a pipe, so we don't need 'wa'
-                if args.to:
-                    with open(args.to, 'w') as f:
-                        f.write(chr(val))
+                if self.output is not None:
+                    self.output.write(bytes([val]))
+                    self.output.flush()
             case self.BC:
                 self._write_serial_ctrl(port, val)
 
     def read(self, port):
-        tnow = time.time() - tstart
+        tnow = time.time() - self.tstart
         if len(self.queue) > 0 and tnow > self.queue[0][0]:
             # ready to add that string to the output string
             self.s += self.queue.pop(0)[1]
@@ -322,7 +319,7 @@ class IOSerial(IODevice):
                     return ord(c)
                 print(f"WARNING: trying to read data fra empty serial port at io port {port}. Returning 0 {pc_disasm_str()}")
                 return 0
-        print(f"WARNING ({self}): unknown port {port} ... ports are {self.ALL=} {self.BD=} {self.BC=} {pc_disasm_str()}")
+        print(f"WARNING ({self}): unknown port {port} ... ports are {self.PORTS=} {self.BD=} {self.BC=} {pc_disasm_str()}")
         return 0
 
 
@@ -331,7 +328,7 @@ class IOSerialDim1001(IOSerial):
     # TODO: __init__ might reference parent vals
     BC = 1
     BD = 0
-    ALL = [BC, BD]
+    PORTS = [BC, BD]
 
 
 
@@ -511,7 +508,7 @@ class IODiskController(IODevice):
     O_DATA = 0x8a
     I_STATUS = 0x98
     I_DATA = 0x9a
-    ALL = [O_CW1, O_CW2, O_DATA, I_STATUS, I_DATA]
+    PORTS = [O_CW1, O_CW2, O_DATA, I_STATUS, I_DATA]
     pnames = {
         O_CW1 : "O_CW1",
         O_CW2 : "O_CW2",
@@ -738,10 +735,9 @@ def io_out(port, val):
 
 def check_console():
     # Keyboard / Console input
-    if (plist := ch_in_p.poll(0)):
+    if ch_in_p.poll(0):
         # The console doesn't like 8-bit ascii, so limit it to 7-bit.
         ch = chr(ord(ch_in.read(1)) & 0x7f)
-        # print("Got poll", plist, ch)
         if ch == "\r":
             print("YES, GOT cr")
         if ch == "\n":
@@ -780,37 +776,34 @@ def run_sim(N_STEPS=1000):
     """Starts the simulator
     N_STEPS is how many steps the z80 C library should run before returning to Python
     for another iteration. Too many steps means the console and some other functions
-    may become less responsive. Too few steps add overhead.
+    (like the console) may become less responsive. Too few steps add overhead.
     """
-    global tstart
-    # Start running simulator
-    N = 3_550_000
+    N = 3_550_000     # report on performance once after >= N iterations
     tstart = time.time()
-    z80emu.run_steps(N)
-    z80emu._raise_pending_callback_exception()
-    tstop = time.time()
-    print(f"Ran {N:_} steps in {tstop-tstart:.3f} seconds ({N/(tstop-tstart):_} steps/s)")
-    sys.stdout.flush()
-    # TODO: this has a few issues. Python needs to run sometimes and
-    # run_step also polls the console port.
-    # Polling once in a while works though.
-    # ^C out of the proam doesn't work reliably. Something to do with running
-    # inside a C ext? Maybe the PyErr_CheckSignals() call is enough.
-    # TODO: (move else where) - delayed print since we don't flush everywhere?.
-    while not z80emu.kbd_interrupted:
+    iters = 0
+    while True:
         if sim_paused:
-            time.sleep(1)
+            time.sleep(0.1)
             continue
         check_console()
         z80emu.run_steps(N_STEPS)
-        z80emu._raise_pending_callback_exception()
+
+        # Performance monitoring at startup
+        iters += N_STEPS
+        if iters > N and tstart > 0:
+            tstop = time.time()
+            print(f"Ran {iters:_} steps in {tstop-tstart:.3f} seconds ({iters/(tstop-tstart):_} steps/s)")
+            sys.stdout.flush()
+            tstart = 0  # disable
+
+
 
 
 def dump_mem(fname):
     """Write a memory dump to a file"""
     print(f"Dumping memory to {fname}. Pausing simulator.")
     with sim_paused_context():
-        mem = z80emu.ffi.buffer(z80emu.lib.z80emu_memory(), z80emu.Z80_MEM_SIZE)
+        mem = z80emu.raw_memory()
         Path(fname).write_bytes(mem)
         print(f" - done dumping memory to {fname}. Restoring pause state of simulator.")
 
@@ -836,7 +829,7 @@ class PromRegion:
 
     def _write_region(self, data, backup=False, protect=0):
         """Writes data to the region, optionally storing the old values to self.ram_vals"""
-        mem = z80emu.ffi.buffer(z80emu.lib.z80emu_memory(), z80emu.Z80_MEM_SIZE)
+        mem = z80emu.raw_memory()
         rng = slice(self.start_addr, self.start_addr + len(self))
         if backup:
             self.ram_vals = mem[rng]
@@ -845,24 +838,27 @@ class PromRegion:
             mem[rng] = data
             mem_set_prot(self.start_addr, self.start_addr + len(self), protect)
 
+    def set_enabled(self, enabled):
+        enabled = bool(enabled)
+
+        if enabled == self.is_on:
+            # No change
+            return
+
+        if enabled:
+            # RAM is visible. Save it before replacing it with PROM.
+            self._write_region(self.raw_data, backup=True, protect=1)
+        else:
+            # Restore the saved RAM.
+            self._write_region(self.ram_vals, backup=False, protect=0)
+
+        self.is_on = enabled
+
     def turn_on(self):
-        """Turn on PROM, hiding RAM. Also protects prom region from writes."""
-        # If RAM was active, store the old RAM values.
-        self._write_region(self.raw_data, backup=not self.is_on, protect=1)
-        self.is_on = True
+        self.set_enabled(True)
 
     def turn_off(self):
-        """Turn off PROM, exposing RAM. Unprotects region."""
-        # Overwrite prom region with RAM data. Make sure PROM contents are not stored in RAM copy.
-        self._write_region(self.ram_vals, backup=False, protect=0)
-        self.is_on = False
-
-    def save_ram(self, fname):
-        """Store dump of region as it looks now into a file"""
-        print(f"Saving RAM (covered by PROM) from addr {self.start_addr} as {fname}")
-        # Trick: update ram_vals by making a "write" with no data
-        self._write_region(None, backup=True)
-        Path(fname).write_bytes(self.ram_vals)
+        self.set_enabled(False)
 
 
 class Board:
@@ -873,25 +869,21 @@ class Board:
         self.io_ports = defaultdict(IOPrint)
         self.proms = []
 
-    def proms_on(self):
-        print(" -- NB: Turning on PROM chips")
+    def set_proms_enabled(self, enabled):
+        print("-- NB: Board setting proms to {enabled} = ", "enabled" if enabled else "disabled")
         for prom in self.proms:
-            prom.turn_on()
-    def proms_off(self):
-        print(" -- NB: Turning OFF PROM chips")
-        for prom in self.proms:
-            prom.turn_off()
+            prom.set_enabled(enabled)
 
 
 class Board1001(Board):
     def __init__(self, config):
         super().__init__(config)
-        self.sport = IOSerialDim1001()
+        self.sport = IOSerialDim1001(args.to)
         self.sport.register_ports(self.io_ports)
 
         # Dim 1001 uses only one prom chip.
         self.proms.append(PromRegion(Path(args.c, config['prom0']), 0x0))
-        self.proms_on()
+        self.set_proms_enabled(True)
 
         # TODO: this probably won't work yet.
         # The disk controller appears to be mapped to the same ports
@@ -906,58 +898,60 @@ class Board1001(Board):
 class Board1003(Board):
     def __init__(self, config):
         super().__init__(config)
-        self.sport = IOSerial()
+        self.sport = IOSerial(args.to)
         self.sport.register_ports(self.io_ports)
         self.pport = IOPar()
         self.pport.register_ports(self.io_ports)
 
-        if 0:
-            # For now, just ignore the counter/timer. TODO: fix this.
-            self.ign = IOIgnore()
-            self.ign.register_ports(self.io_ports, IOCTC.ALL)
-        else:
-            self.ctcdev = IOCTC()
-            self.ctcdev.register_ports(self.io_ports)
+        self.ctcdev = IOCTC()
+        self.ctcdev.register_ports(self.io_ports)
 
-        self.iop14 = IOP14()
+        self.iop14 = IOP14(self)
         self.iop14.register_ports(self.io_ports)
 
         # Dim 1003 uses two proms. The second one is mapped at 0x1000, leaving a region of RAM between the chips.
         self.proms.append(PromRegion(Path(args.c, config['prom0']), 0x0))
         self.proms.append(PromRegion(Path(args.c, config['prom1']), 0x1000))
-        self.proms_on()
+        self.set_proms_enabled(True)
 
         self.dsk = IODiskController(d_imgs)
         self.dsk.register_ports(self.io_ports)
 
 
-parser = argparse.ArgumentParser()
-parser.add_argument("-t", help="Console I/O. Use if input and output are to the same device.")
-parser.add_argument("-ti", help="Console input")
-parser.add_argument("-to", help="Console output")
-parser.add_argument("-script", help="Script to send to the console input.")
-# parser.add_argument("--disk", nargs='+')
-parser.add_argument("-c", default="run-tst", help="Config directory path (and where disk images are stored)")
-parser.add_argument("-ec", help="path to connect embedded python console to")
-args = parser.parse_args()
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-t", help="Console I/O. Use if input and output are to the same device.")
+    parser.add_argument("-ti", help="Console input")
+    parser.add_argument("-to", help="Console output")
+    parser.add_argument("-script", help="Script to send to the console input.")
+    # parser.add_argument("--disk", nargs='+')
+    parser.add_argument("-c", default="run-tst", help="Config directory path (and where disk images are stored)")
+    parser.add_argument("-ec", help="path to connect embedded python console to")
+    args = parser.parse_args()
 
-if args.t:
-    # Use the same pty for both input and output
-    args.ti = args.t
-    args.to = args.t
-    
+    if args.t:
+        # Use the same pty for both input and output
+        args.ti = args.t
+        args.to = args.t
+
+    return args
+
+
+args = parse_args()
 if (not args.ti) or (not args.to):
-    print("You need to either specify -t (for combined console input/output)  or both -ti and -to")
-    exit(1)
+    raise SystemExit(f"Please specify -t, or specify both -ti and -to")
+
 
 config = read_config(args.c)
 print(config)
+
+z80emu.reset()
 
 # TODO: Hack since there is no clean way of failing if a non-existing disk is requested in the controller.
 # currently, the emulator just crashes. This adds some default images.
 print("Using disk image(s) from", config['disk-images'])
 d_imgs = [diskimage.DiskImage.from_file(dname) for dname in config['disk-images']]
-d_imgs += [diskimage.prog_make_test_img( pathlib.Path(args.c) / f"disk-{i:02}.img")
+d_imgs += [diskimage.prog_make_test_img(Path(args.c) / f"disk-{i:02}.img")
            for  i in range(len(d_imgs),8)]
 
 btypes = {
