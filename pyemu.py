@@ -18,12 +18,11 @@ Ideas:
 - maybe move some of the emulation to C later to make this portable to smaller devices?
 """
 
-from curses import delay_output
 import time
 import sys
 import select
 import heapq
-from collections import defaultdict, deque
+from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
 import argparse
@@ -282,13 +281,13 @@ class IOSerial(IODevice):
             data = data.encode("ascii")
         heapq.heappush(
             self.scheduled_input,
-            (float(delay), bytes(data)))
+            (float(delay) + time.monotonic(), bytes(data)))
 
     def _release_scheduled_input(self):
-        elapsed = time.monotonic() - self.started_at
+        tnow = time.monotonic()
 
         while (self.scheduled_input
-               and self.scheduled_input[0][0] <= elapsed):
+               and self.scheduled_input[0][0] <= tnow):
             _, data = heapq.heappop(self.scheduled_input)
             self.input_bytes.extend(data)
 
@@ -762,7 +761,7 @@ def check_console(board, ch_in, poller):
         # doesn't understand newline (\n), so translate to CR (\r)
         ch = 0xd
 
-    board.sport.schedule_bytes(0.01, bytes([ch]))
+    board.sport.queue_bytes(bytes([ch]))
 
 
 # Used to pause and continue the simulator.
@@ -821,8 +820,7 @@ def dump_mem(fname):
     """Write a memory dump to a file"""
     print(f"Dumping memory to {fname}. Pausing simulator.")
     with sim_paused_context():
-        mem = z80emu.raw_memory()
-        Path(fname).write_bytes(mem)
+        Path(fname).write_bytes(z80emu.memory_snapshot())
         print(f" - done dumping memory to {fname}. Restoring pause state of simulator.")
 
 
@@ -837,8 +835,8 @@ class PromRegion:
     def __init__(self, fname, start_addr):
         self.fname = fname
         self.start_addr = start_addr
-        self.raw_data = open(fname, 'rb').read()
-        self.ram_vals = bytes([0] * len(self.raw_data))
+        self.raw_data = open(fname, 'rb').read_bytes()
+        self.ram_vals = bytes(len(self.raw_data))
         self.is_on = False
         self.turn_on()
 
@@ -850,7 +848,7 @@ class PromRegion:
         mem = z80emu.raw_memory()
         rng = slice(self.start_addr, self.start_addr + len(self))
         if backup:
-            self.ram_vals = mem[rng]
+            self.ram_vals = bytes(mem[rng])
         if data is not None:
             # Only update memory and set protection if data is there. Used by save_ram
             mem[rng] = data
@@ -883,7 +881,7 @@ class Board:
     def __init__(self, config, d_imgs, console_output):
         self.config = config
         self.d_imgs = d_imgs
-        console_output = console_output
+        self.console_output = console_output
         # Set up I/O address space
         self.io_ports = {}
         self.unknown_io = IOPrint()
@@ -943,8 +941,8 @@ class Board1003(Board):
         self.dsk.register_ports(self.io_ports)
 
 
-def parse_args():
-    parser = argparse.ArgumentParser()
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(argv)
     parser.add_argument("-t", help="Console I/O. Use if input and output are to the same device.")
     parser.add_argument("-ti", help="Console input")
     parser.add_argument("-to", help="Console output")
@@ -955,9 +953,9 @@ def parse_args():
     args = parser.parse_args()
     return args
 
-def make_config():
+def make_config(argv=None):
     """Reads config file and adds information from args to the config"""
-    args = parse_args()
+    args = parse_args(argv)
     if args.t:
         # Use the same pty for both input and output
         args.ti = args.t
@@ -979,6 +977,12 @@ def make_config():
     return config
 
 
+BOARD_TYPES = {
+    'dim-1001' : Board1001,
+    'dim-1003' : Board1003
+}
+
+
 def main():
     config = make_config()
 
@@ -989,16 +993,22 @@ def main():
     # Non-existing images will be created on the disk on the first write.
     print("Using disk image(s) from", config['disk-images'])
     d_imgs = [diskimage.DiskImage.from_file(dname) for dname in config['disk-images']]
-    d_imgs += [diskimage.DiskImage.empty_image(Path(config['run-dir']) / f"disk-{i:02}.img")
-               for  i in range(len(d_imgs),8)]
+
+    if len(d_imgs) > 8:
+        raise ValueError(f"disk controller supports at most 8 images, got {len(d_imgs)}")
+
+    for drivenum in range(len(d_imgs), 8):
+        path = Path(config['run-dir']) / f"disk-{i:02}.img")
+        d_imgs.append(diskimage.DiskImage.empty_image(path))
 
     with open(config["console_in"], "rb", buffering=0) as console_in, \
          open(config["console_out"], "wb", buffering=0) as console_out:
 
-        board = {
-            'dim-1001' : Board1001,
-            'dim-1003' : Board1003
-        }[config['board']](config, d_imgs, console_out)
+        if (board_type := BOARD_TYPES.get(config['board'], None)) is None:
+            supported = ", ".join(sorted(BOARD_TYPES))
+            raise ValueError(f"unsupported board {config['board']!r}; expected one of: {supported}")
+
+        board = board_type(config, d_imgs, console_out)
 
         set_in_callback(board.io_in)
         set_out_callback(board.io_out)

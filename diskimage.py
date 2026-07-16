@@ -14,7 +14,6 @@ Which is a total of 77 * 26 * 128 = 256256 bytes
 
 import os
 import argparse
-from enum import Enum, auto
 
 TRACKS=77
 SECTORS=26
@@ -323,8 +322,8 @@ def test():
         test_read(img3, [(0, 1), (0, 7), (0, 8), (0, 9), (1, 1), (1, 2)])
         img3.save()
 
-def parse_args():
-    parser = argparse.ArgumentParser()
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(argv)
     parser.add_argument("-mp", nargs=1, default=[],
                         help="Create a Mycron prog disk image and store it to he given file name")
     parser.add_argument("-md", nargs=1, default=[],
