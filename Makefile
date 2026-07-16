@@ -10,7 +10,7 @@ TARGS = _z80emu_cffi.abi3.so
 all: $(TARGS)
 
 clean:
-	rm -rf build _z80*.so
+	rm -rf build _z80*.so __pycache__
 
 _z80emu_cffi.abi3.so: setup.py Makefile z80emu.py z80emu_build.py z80emu_core_z80ex.c z80emu_core.h
 	python setup.py build_ext --inplace

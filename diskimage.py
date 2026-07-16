@@ -13,6 +13,8 @@ Which is a total of 77 * 26 * 128 = 256256 bytes
 """
 
 import os
+import argparse
+from enum import Enum, auto
 
 TRACKS=77
 SECTORS=26
@@ -84,14 +86,15 @@ def secno_to_ts(secno):
     return track, sector
 
 
-class DiskImage:
-    DSK_READ = 0      # Every sector read opens the file (if present) and reads the sector from the file
-    DSK_BUFF = 0      # Sector reads copy from an internal buffer
+class ReadSource(Enum):
+    FILE = auto()     # Every sector read opens the file (if present) and reads the sector from the file
+    BUFFER = auto()   # Sector reads copy from an internal buffer
 
+class DiskImage:
     def __init__(self, fname, data):
         self.fname = fname
         self.barr = bytearray(data)
-        self._read_source = self.DSK_READ
+        self._read_source = ReadSource.FILE
 
     @classmethod
     def empty_image(cls, name="NA"):
@@ -114,13 +117,15 @@ class DiskImage:
         assert 1 <= sector <= SECTORS
         assert 0 <= track < TRACKS
         offset = ((track * SECTORS) + (sector - 1)) * SECTOR_SIZE
-        if self._read_source == self.DSK_READ and os.path.isfile(self.fname):
+        if self._read_source == ReadSource.FILE and os.path.isfile(self.fname):
             with open(self.fname, 'rb') as f:
                 f.seek(offset)
                 data = f.read(SECTOR_SIZE)
                 if len(data) < SECTOR_SIZE:
                     # pad zero
                     data += bytes(SECTOR_SIZE - len(data))
+                # update local image even if we don't use it.
+                self.barr[offset:offset + SECTOR_SIZE] = data
                 return data
         else:
             return self.barr[offset:offset + SECTOR_SIZE]
@@ -134,10 +139,16 @@ class DiskImage:
         offset = ((track * SECTORS) + (sector - 1)) * SECTOR_SIZE
         self.barr[offset:offset + SECTOR_SIZE] = data
         if flush:
-            # print(f"DSK_WRITE_FLUSH {track:02}.{sector:02} {data}")
-            with open(self.fname, 'rb+') as f:
-                f.seek(offset)
-                f.write(data)
+            try:
+                # print(f"DSK_WRITE_FLUSH {track:02}.{sector:02} {data}")
+                with open(self.fname, 'rb+') as f:
+                    f.seek(offset)
+                    f.write(data)
+            except FileNotFoundError:
+                print("Flush write without any existing image. Flushing entire image from memory.")
+                with open(self.fname, mode="wb") as f:
+                    f.write(self.barr)
+
 
     def all_sectors(self):
         for trk in range(TRACKS):
@@ -244,7 +255,7 @@ def prog_make_test_img(name="NA"):
     ehdr[:5] = b"ERMAP"    # TODO:  c5 d9 d4 c1 d7  instead of ERMAP?
     img.write_sector(0, 5, ehdr)
     img.write_sector(0, 7, vol_sec)
-    img.write_sector(0, 8, prog_make_8_dirents(prog_make_dir_entry('foo', 2, 1, 0x3000, 1, 0x4000, 1)))
+    img.write_sector(0, 8, prog_make_8_dirents(prog_make_dir_entry('FOO', 2, 1, 0x3000, 1, 0x4000, 1)))
     for hno in range(9, SECTORS+1):
         img.write_sector(0, hno, prog_make_8_dirents())
     img.write_sector(2, 1, prog_simple)
@@ -284,6 +295,7 @@ def test():
             print(f"---{img.fname} sector {tno}, {sno}----")
             hexdump_data(s)
 
+    print("tst conv", (7, 8), ts_to_secno(7, 8), secno_to_ts(ts_to_secno(7, 8)))
     if 0:
         img = DiskImage.from_file("diskimg/mm-03.img")
         test_read(img, [(0, 1), (0, 26), (0, 7), (0, 8), (1, 1)])
@@ -298,7 +310,24 @@ def test():
         test_read(img3, [(0, 1), (0, 7), (0, 8), (0, 9), (1, 1), (1, 2)])
         img3.save()
 
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-mp", nargs=1, default=[], help="Create a Mycron data disk image and store it to he given file name")
+    parser.add_argument("-md", nargs=1, default=[], help="Create a Mycron prog disk image and store it to he given file name")
+    parser.add_argument("-me", nargs=1, default=[], help="Create an emptydisk image and store it to he given file name")
+    parser.add_argument("-t", action="store_true", help="Run some simple tests")
+    return parser.parse_args()
 
 if __name__ == "__main__":
-    print("tst conv", (7, 8), ts_to_secno(7, 8), secno_to_ts(ts_to_secno(7, 8)))
-    test()
+    args = parse_args()
+    for fn in args.mp:
+        print("Making prog test image", fn)
+        prog_make_test_img(fn).save()        
+    for fn in args.md:
+        print("Making data test image", fn)
+        data_make_test_img(fn).save()
+    for fn in args.me:
+        print("Making empty image", fn)
+        DiskImage.empty_image(fn).save()
+    if args.t:
+        test()

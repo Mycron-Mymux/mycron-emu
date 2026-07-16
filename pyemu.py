@@ -45,11 +45,12 @@ def regs_str(regs=None):
         f"{name}={regs[name]:x}"
         for name in rnames
         if name in regs)
-    return (regs, f"REGS_hex({vals})")
+    return f"REGS_hex({vals})"
 
 
 def regs_stack_str():
-    regs, s = regs_str()
+    regs = get_regs()
+    s = regs_str(regs)
     sp = regs['SP']
     s += " Stack: ["
     s += " ".join([f"{mem_rd(sp + i):02x}" for i in range(10)])
@@ -87,7 +88,7 @@ def trace_write(msg, include_regs=False, include_stack=False, pc_offset=0):
         # also includes regs
         s += "  " + regs_stack_str()
     elif include_regs:
-        s += "  " + regs_str()[1]
+        s += "  " + regs_str()
     print(s)
 
 
@@ -556,8 +557,8 @@ class IODiskController(IODevice):
     WR_ST_4   = "w4"
     WR_ST_DATA = "wdata"  # next up is a stream of data on the input
 
-    N_TRACKS = 78  # track 0..77
-    N_SECTS = 26   # sector 1..26
+    N_TRACKS = diskimage.TRACKS   # track 0..76
+    N_SECTS = diskimage.SECTORS   # sector 1..26
 
     verbose = False
 
@@ -738,8 +739,6 @@ def check_console():
     if ch_in_p.poll(0):
         # The console doesn't like 8-bit ascii, so limit it to 7-bit.
         ch = chr(ord(ch_in.read(1)) & 0x7f)
-        if ch == "\r":
-            print("YES, GOT cr")
         if ch == "\n":
             ch = "\r"  # doesn't expect newline...
         board.sport.queue_string(0.01, ch)
@@ -947,11 +946,15 @@ print(config)
 
 z80emu.reset()
 
-# TODO: Hack since there is no clean way of failing if a non-existing disk is requested in the controller.
+# TODO: Hack since there is currently no clean way of failing if a non-existing disk is requested in the controller.
 # currently, the emulator just crashes. This adds some default images.
+# A future update might consider pausing the emulator to let the user create the file, or ask the user
+# if a file should be created. Another option is to provide a flag to control if dirty images should be
+# written back to the file system (write through for existing images, dump entire empty img + write through
+# for non-existing images).
 print("Using disk image(s) from", config['disk-images'])
 d_imgs = [diskimage.DiskImage.from_file(dname) for dname in config['disk-images']]
-d_imgs += [diskimage.prog_make_test_img(Path(args.c) / f"disk-{i:02}.img")
+d_imgs += [diskimage.DiskImage.empty_image(Path(args.c) / f"disk-{i:02}.img")
            for  i in range(len(d_imgs),8)]
 
 btypes = {
@@ -965,12 +968,18 @@ set_out_callback(io_out)
 
 if args.script in ["t", "true"]:
     # Add some strings to automate testing
-    # NB: no enter after this as it would abort it after the first line
-    board.sport.queue_string(0.1, "D" + "1000" + "1100")
-    # This one needs a "return" to work.
+    # NB: no return after the command as the keypress would abort the dump before completion
+    board.sport.queue_string(0.1, "D" + "1000" + "1020")
+    # L needs a "return" to work.
     # NB: L loads AND runs the program!
-    board.sport.queue_string(0.3, "L1foo\r")
-    # sport.queue_string(0.3, "S2000F5D5C53D0032D70FCD0E113D0006020E0216001E00210030CD8500F53AD70FCD4911F101CD0000\r")
+    board.sport.queue_string(1.0, "L1CPM2.2W\r")
+    board.sport.queue_string(2.0, "dir\r")
+    board.sport.queue_string(3.0, "mycrop\r")
+    board.sport.queue_string(4.0, "L1CPM2.2W\r")
+    # Calls 110e (BDO) 
+    # Emulates a disk write of data from 0x3000 to disk 04... TODO: this is broken. Use z80asm to create a new one.
+    # board.sport.queue_string(4, "S2000F5D5C53E0432D70FCD0E113E0406020E0216001E00210030CD8500F53AD70FCD4911F101CD0000\r")
+    # board.sport.queue_string(5, "G2000\r")
 elif args.script:
     print("Adding script", args.script)
     board.sport.queue_string(0.3, args.script)
