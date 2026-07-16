@@ -86,15 +86,11 @@ def secno_to_ts(secno):
     return track, sector
 
 
-class ReadSource(Enum):
-    FILE = auto()     # Every sector read opens the file (if present) and reads the sector from the file
-    BUFFER = auto()   # Sector reads copy from an internal buffer
-
 class DiskImage:
-    def __init__(self, fname, data):
+    def __init__(self, fname, data, read_from_file=True):
         self.fname = fname
         self.barr = bytearray(data)
-        self._read_source = ReadSource.FILE
+        self._read_from_file = read_from_file
 
     @classmethod
     def empty_image(cls, name="NA"):
@@ -103,7 +99,8 @@ class DiskImage:
     @classmethod
     def from_file(cls, fname):
         data = open(fname, 'rb').read()
-        assert len(data) == IMG_LEN
+        if len(data) != IMG_LEN:
+            raise ValueError(f"{fname}: expected {IMG_LEN} bytes, got {len(data)}")
         return cls(fname, data)
 
     def save(self, fname=None):
@@ -127,17 +124,19 @@ class DiskImage:
         file.
         """
         offset = self._get_offset(track, sector)
-        if self._read_source == ReadSource.FILE and os.path.isfile(self.fname):
-            with open(self.fname, 'rb') as f:
-                f.seek(offset)
-                data = f.read(SECTOR_SIZE)
-                if len(data) < SECTOR_SIZE:
-                    # pad zero
-                    data += bytes(SECTOR_SIZE - len(data))
-                # update local image even if we don't use it.
+        if self._read_from_file:
+            try:
+                with open(self.fname, 'rb') as f:
+                    f.seek(offset)
+                    data = f.read(SECTOR_SIZE)
+            except FileNotFoundError:
+                pass
+            else:
+                # pad zero
+                data = data.ljust(SECTOR_SIZE, b"\0")
+                # update buffer copy of the image
                 self.barr[offset:offset + SECTOR_SIZE] = data
-
-        return self.barr[offset:offset + SECTOR_SIZE]
+        return bytes(self.barr[offset:offset + SECTOR_SIZE])
 
     def write_sector(self, track, sector, data, flush=False):
         """NB: sectors are numbered 1..26
@@ -145,8 +144,11 @@ class DiskImage:
         If the file does not exist, creates the file and dumps the entire
         disk image to the file.
         """
-        assert len(data) == SECTOR_SIZE
-        assert isinstance(data, (bytes, bytearray))
+        if not isinstance(data, (bytes, bytearray)):
+            raise TypeError("sector data must be bytes or bytearray")
+        if len(data) != SECTOR_SIZE:
+            raise ValueError(f"sector data must contain {SECTOR_SIZE} bytes, got {len(data)}")
+
         offset = self._get_offset(track, sector)
         self.barr[offset:offset + SECTOR_SIZE] = data
         if flush:
@@ -323,10 +325,14 @@ def test():
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-mp", nargs=1, default=[], help="Create a Mycron data disk image and store it to he given file name")
-    parser.add_argument("-md", nargs=1, default=[], help="Create a Mycron prog disk image and store it to he given file name")
-    parser.add_argument("-me", nargs=1, default=[], help="Create an emptydisk image and store it to he given file name")
-    parser.add_argument("-t", action="store_true", help="Run some simple tests")
+    parser.add_argument("-mp", nargs=1, default=[],
+                        help="Create a Mycron prog disk image and store it to he given file name")
+    parser.add_argument("-md", nargs=1, default=[],
+                        help="Create a Mycron data disk image and store it to he given file name")
+    parser.add_argument("-me", nargs=1, default=[],
+                        help="Create an emptydisk image and store it to he given file name")
+    parser.add_argument("-t", action="store_true",
+                        help="Run some simple tests")
     return parser.parse_args()
 
 if __name__ == "__main__":

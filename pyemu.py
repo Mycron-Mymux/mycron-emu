@@ -18,10 +18,12 @@ Ideas:
 - maybe move some of the emulation to C later to make this portable to smaller devices?
 """
 
+from curses import delay_output
 import time
 import sys
 import select
-from collections import defaultdict
+import heapq
+from collections import defaultdict, deque
 from contextlib import contextmanager
 from pathlib import Path
 import argparse
@@ -259,18 +261,36 @@ class IOSerial(IODevice):
     def __init__(self, output, **kvals):
         super().__init__(**kvals)
         self.output = output
-        self.s = ""
-        self.queue = []
+        self.input_bytes = deque()
+        self.scheduled_input = []
+        self.started_at = time.monotonic()
         # next register to write if write-reg contains data pointers
         self.next_reg = {
             self.AC: 0,
             self.BC: 0
         }
-        self.tstart = time.time()
 
-    def queue_string(self, at, s):
-        self.queue.append([at, s])
+    def queue_bytes(self, data):
+        """Queue bytes delivered"""
+        if isinstance(data, str):
+            data = data.encode("ascii")
+        self.input_bytes.extend(data)
 
+    def schedule_bytes(self, delay, data):
+        """Queue bytes to be delivered after 'delay' seconds"""
+        if isinstance(data, str):
+            data = data.encode("ascii")
+        heapq.heappush(
+            self.scheduled_input,
+            (float(delay), bytes(data)))
+
+    def _release_scheduled_input(self):
+        elapsed = time.monotonic() - self.started_at
+
+        while (self.scheduled_input
+               and self.scheduled_input[0][0] <= elapsed):
+            _, data = heapq.heappop(self.scheduled_input)
+            self.input_bytes.extend(data)
 
     def _write_serial_ctrl(self, port, val):
         """Emulate write to console serial port's ctrl register"""
@@ -302,24 +322,19 @@ class IOSerial(IODevice):
                 self._write_serial_ctrl(port, val)
 
     def read(self, port):
-        tnow = time.time() - self.tstart
-        if len(self.queue) > 0 and tnow > self.queue[0][0]:
-            # ready to add that string to the output string
-            self.s += self.queue.pop(0)[1]
+        self._release_scheduled_input()
 
-        match port:
-            case self.BC:
-                # For polling mode, just indicate that it's always ready to transmit more + whether there is data queued.
-                has_data = 1 if len(self.s) > 0 else 0   # naughty to use int(len(self.s) > 0) ?
-                return 4 | has_data
-            case self.BD:
-                if len(self.s) > 0:
-                    c = self.s[0]
-                    self.s = self.s[1:]
-                    return ord(c)
-                print(f"WARNING: trying to read data fra empty serial port at io port {port}. Returning 0 {pc_disasm_str()}")
-                return 0
-        print(f"WARNING ({self}): unknown port {port} ... ports are {self.PORTS=} {self.BD=} {self.BC=} {pc_disasm_str()}")
+        if port == self.BC:
+            # For polling mode, just indicate that it's always ready to transmit more (4) +
+            # whether there is data queued (1 or 0).
+            return 4 | bool(self.input_bytes)
+        if port == self.BD:
+            if self.input_bytes:
+                return self.input_bytes.popleft()
+            print(f"WARNING: read from empty serial port {port}. Returning 0 {pc_disasm_str()}")
+            return 0
+
+        print(f"WARNING ({self}): unknown port {port}. Supporting one of {self.BD=} {self.BC=} {pc_disasm_str()}")
         return 0
 
 
@@ -730,14 +745,24 @@ class IODiskController(IODevice):
         return val
 
 
-def check_console(board, ch_in, ch_in_p):
+def check_console(board, ch_in, poller):
     # Keyboard / Console input
-    if ch_in_p.poll(0):
-        # The console doesn't like 8-bit ascii, so limit it to 7-bit.
-        ch = chr(ord(ch_in.read(1)) & 0x7f)
-        if ch == "\n":
-            ch = "\r"  # doesn't expect newline...
-        board.sport.queue_string(0.01, ch)
+    if not poller.poll(0):
+        return
+
+    data = ch_in.read(1)
+    if not data:
+        poller.unregister(ch_in.fileno())
+        return
+
+    # The console doesn't like 8-bit ascii, so limit it to 7-bit.
+    ch = data[0] & 0x7f
+
+    if ch == 0xa:
+        # doesn't understand newline (\n), so translate to CR (\r)
+        ch = 0xd
+
+    board.sport.schedule_bytes(0.01, bytes([ch]))
 
 
 # Used to pause and continue the simulator.
@@ -855,12 +880,13 @@ class PromRegion:
 
 
 class Board:
-    btypes = {}
-    def __init__(self, config, d_imgs):
+    def __init__(self, config, d_imgs, console_output):
         self.config = config
         self.d_imgs = d_imgs
+        console_output = console_output
         # Set up I/O address space
-        self.io_ports = defaultdict(IOPrint)
+        self.io_ports = {}
+        self.unknown_io = IOPrint()
         self.proms = []
 
     def set_proms_enabled(self, enabled):
@@ -869,16 +895,16 @@ class Board:
             prom.set_enabled(enabled)
 
     def io_in(self, port):
-        return self.io_ports[port].read(port)
+        return self.io_ports.get(port, self.unknown_io).read(port)
 
     def io_out(self, port, val):
-        self.io_ports[port].write(port, val)
+        self.io_ports.get(port, self.unknown_io).write(port, val)
 
 
 class Board1001(Board):
-    def __init__(self, config, d_imgs):
-        super().__init__(config, d_imgs)
-        self.sport = IOSerialDim1001(open(config['console_out'], 'wb', buffering=0))
+    def __init__(self, config, d_imgs, console_output):
+        super().__init__(config, d_imgs, console_output)
+        self.sport = IOSerialDim1001(console_output)
         self.sport.register_ports(self.io_ports)
 
         # Dim 1001 uses only one prom chip.
@@ -895,9 +921,9 @@ class Board1001(Board):
 
 
 class Board1003(Board):
-    def __init__(self, config, d_imgs):
-        super().__init__(config, d_imgs)
-        self.sport = IOSerial(open(config['console_out'], 'wb', buffering=0))
+    def __init__(self, config, d_imgs, console_output):
+        super().__init__(config, d_imgs, console_output)
+        self.sport = IOSerial(console_output)
 
         self.sport.register_ports(self.io_ports)
         self.pport = IOPar()
@@ -966,49 +992,54 @@ def main():
     d_imgs += [diskimage.DiskImage.empty_image(Path(config['run-dir']) / f"disk-{i:02}.img")
                for  i in range(len(d_imgs),8)]
 
-    board = {
-        'dim-1001' : Board1001,
-        'dim-1003' : Board1003
-    }[config['board']](config, d_imgs)
+    with open(config["console_in"], "rb", buffering=0) as console_in, \
+         open(config["console_out"], "wb", buffering=0) as console_out:
 
-    set_in_callback(board.io_in)
-    set_out_callback(board.io_out)
+        board = {
+            'dim-1001' : Board1001,
+            'dim-1003' : Board1003
+        }[config['board']](config, d_imgs, console_out)
 
-    if config['script'] in ["t", "true"]:
-        # Add some strings to automate testing
-        # NB: no return after the command as the keypress would abort the dump before completion
-        board.sport.queue_string(0.1, "D" + "1000" + "1020")
-        # L needs a "return" to work.
-        # NB: L loads AND runs the program!
-        board.sport.queue_string(1.0, "L1CPM2.2W\r")
-        board.sport.queue_string(2.0, "dir\r")
-        board.sport.queue_string(3.0, "mycrop\r")
-        board.sport.queue_string(4.0, "L1CPM2.2W\r")
-        # Calls 110e (BDO)
-        # Emulates a disk write of data from 0x3000 to disk 04... TODO: this is broken. Use z80asm to create a new one.
-        # board.sport.queue_string(4, "S2000F5D5C53E0432D70FCD0E113E0406020E0216001E00210030CD8500F53AD70FCD4911F101CD0000\r")
-        # board.sport.queue_string(5, "G2000\r")
-    elif config['script']:
-        print("Adding script", args.script)
-        board.sport.queue_string(0.3, args.script)
-    # sport.queue_string(0.1, "D" + "1000" + "1010")
+        set_in_callback(board.io_in)
+        set_out_callback(board.io_out)
 
-    # Slightly hacky, but this lets us read from the serial port and put it in the
-    # queue of the emulator's serial port.
-    # NB: need to set it to binary + unbuffered, otherwise terminal input will be buffered and not work properly
-    ch_in = open(config['console_in'], 'rb', 0)
-    ch_in_p = select.poll()
-    ch_in_p.register(ch_in.fileno(), select.POLLIN)
+        if config['script'] in ["t", "true"]:
+            # Add some strings to automate testing
+            # NB: no return after the command as the keypress would abort the dump before completion
+            board.sport.schedule_bytes(0.1, "D" + "1000" + "1020")
+            # L needs a "return" to work.
+            # NB: L loads AND runs the program!
+            board.sport.schedule_bytes(1.0, "L1CPM2.2W\r")
+            board.sport.schedule_bytes(2.0, "dir\r")
+            board.sport.schedule_bytes(3.0, "mycrop\r")
+            board.sport.schedule_bytes(4.0, "L1CPM2.2W\r")
+            # Calls 110e (BDO)
+            # Emulates a disk write of data from 0x3000 to disk 04... TODO: this is broken. Use z80asm to create a new one.
+            # board.sport.schedule_bytes(4, "S2000F5D5C53E0432D70FCD0E113E0406020E0216001E00210030CD8500F53AD70FCD4911F101CD0000\r")
+            # board.sport.schedule_bytes(5, "G2000\r")
+        elif config['script']:
+            print("Adding script", config['script'])
+            board.sport.schedule_bytes(0.3, config['script'])
+        # sport.schedule_bytes(0.1, "D" + "1000" + "1010")
 
-    # If embedded console:
-    if (ec_fn := config['embedded_console']):
-        # Give it everything
-        console_server = start_pty_console(ec_fn, globals() | locals())
+        # Slightly hacky, but this lets us read from the serial port and put it in the
+        # queue of the emulator's serial port.
+        # NB: need to set it to binary + unbuffered, otherwise terminal input will be buffered and not work properly
+        console_in_p = select.poll()
+        console_in_p.register(console_in.fileno(), select.POLLIN)
 
-    # track cpm loading
-    # z80emu.mem_set_track_mask(0xee00, 0xffff, z80emu.TRACK_EXEC)
+        # If embedded console:
+        if (ec_fn := config['embedded_console']):
+            # Give it everything
+            console_server = start_pty_console(ec_fn, globals() | locals())
 
-    run_sim(board, ch_in, ch_in_p)
+        # track cpm loading
+        # z80emu.mem_set_track_mask(0xee00, 0xffff, z80emu.TRACK_EXEC)
+        try:
+            run_sim(board, console_in, console_in_p)
+        except KeyboardInterrupt:
+            print("\nEmulator stopped by keyboard interrupt.", file=sys.stderr)
+            return 130  # interrupted by SIGINT (128 + SIGINT = 2)
 
     return 0
 
