@@ -73,7 +73,7 @@ def pc_disasm_str(pc_offset=0):
         regs = get_regs()
         pc = (regs["PC"] + pc_offset) & 0xffff
         offs = "" if pc_offset == 0 else f" PC offset {pc_offset}"
-        nbytes, asm = mem_dis(pc)
+        _, asm = mem_dis(pc)
         return f"PC={pc:04x} {asm:14}{offs}"
     except Exception as e:
         return f"PC=???? <disasm failed: {e}>"
@@ -93,7 +93,7 @@ def trace_write(msg, include_regs=False, include_stack=False, pc_offset=0):
 
 
 class IODevice:
-    PORTS = []
+    PORTS = ()
     def __init__(self, default_rval=0):
         self.default_rval = default_rval
 
@@ -161,7 +161,7 @@ class IOP14(IODevice):
     Ax15 = 0x15
     Ax16 = 0x16
     Ax17 = 0x17
-    PORTS = [Ax14, Ax15, Ax16, Ax17]
+    PORTS = (Ax14, Ax15, Ax16, Ax17)
 
     # TODO: the default rval seems to influence the values written to IOCTC port 2: 80 with 9b, 20 with 1b
     def __init__(self, board, default_rval=0x9b):
@@ -207,7 +207,7 @@ class IOCTC(IOIgnore):
     CH1 = 0x2
     CH2 = 0x1
     CH3 = 0x3
-    PORTS = [CH0, CH1, CH2, CH3]
+    PORTS = (CH0, CH1, CH2, CH3)
 
     def write(self, port, val):
         trace_write(f"IOCTC OUT [{port:02x}] = {val:02x}", pc_offset=PC_OFFSET_STD_IO)
@@ -226,7 +226,7 @@ class IOPar(IOIgnore):
     BD = 0x5   # Port B data
     AC = 0x6   # Port A control
     BC = 0x7   # Port B control
-    PORTS = [AC, AD, BC, BD]
+    PORTS = (AC, AD, BC, BD)
 
     def write(self, port, val):
         trace_write(f"IOPAR OUT [{port:02x}] = {val:02x}", pc_offset=PC_OFFSET_STD_IO)
@@ -254,12 +254,11 @@ class IOSerial(IODevice):
     BD = 0xe
     AC = 0xd
     AD = 0xc
-    PORTS = [AC, AD, BC, BD]
+    PORTS = (AC, AD, BC, BD)
 
-    def __init__(self, fname, **kvals):
+    def __init__(self, output, **kvals):
         super().__init__(**kvals)
-        self.fname = fname
-        self.output = open(fname, 'wb', buffering=0)
+        self.output = output
         self.s = ""
         self.queue = []
         # next register to write if write-reg contains data pointers
@@ -329,7 +328,7 @@ class IOSerialDim1001(IOSerial):
     # TODO: __init__ might reference parent vals
     BC = 1
     BD = 0
-    PORTS = [BC, BD]
+    PORTS = (BC, BD)
 
 
 
@@ -486,12 +485,17 @@ class DiskDrive:
         self.wbuf = []
 
     def commit_write(self):
-        assert len(self.wbuf) == 128
+        if len(self.wbuf) != self.SECTOR_D_SIZE:
+            raise RuntimeError(
+                f"expected {self.SECTOR_D_SIZE} bytes, got {len(self.wbuf)}"
+            )
         self.data = bytes(self.wbuf)
         # print(f"DSK_WRITE_SECT_COMPLETE {self.track:02}.{self.sector:02} : {self.data}")
         self.disk_img.write_sector(self.track, self.sector, self.data, flush=True)
 
     def write_add_byte(self, bval):
+        if len(self.wbuf) >= self.SECTOR_D_SIZE:
+            raise RuntimeError("sector write buffer overflow")
         self.wbuf.append(bval)
 
     def __repr__(self):
@@ -509,7 +513,7 @@ class IODiskController(IODevice):
     O_DATA = 0x8a
     I_STATUS = 0x98
     I_DATA = 0x9a
-    PORTS = [O_CW1, O_CW2, O_DATA, I_STATUS, I_DATA]
+    PORTS = (O_CW1, O_CW2, O_DATA, I_STATUS, I_DATA)
     pnames = {
         O_CW1 : "O_CW1",
         O_CW2 : "O_CW2",
@@ -726,15 +730,7 @@ class IODiskController(IODevice):
         return val
 
 
-def io_in(port):
-    return board.io_ports[port].read(port)
-
-
-def io_out(port, val):
-    board.io_ports[port].write(port, val)
-
-
-def check_console():
+def check_console(board, ch_in, ch_in_p):
     # Keyboard / Console input
     if ch_in_p.poll(0):
         # The console doesn't like 8-bit ascii, so limit it to 7-bit.
@@ -771,9 +767,9 @@ def sim_paused_context():
             sim_cont()
 
 
-def run_sim(N_STEPS=1000):
+def run_sim(board, ch_in, ch_in_p, steps_per_chunk=1000):
     """Starts the simulator
-    N_STEPS is how many steps the z80 C library should run before returning to Python
+    steps_per_chunk is how many steps the z80 C library should run before returning to Python
     for another iteration. Too many steps means the console and some other functions
     (like the console) may become less responsive. Too few steps add overhead.
     """
@@ -784,18 +780,16 @@ def run_sim(N_STEPS=1000):
         if sim_paused:
             time.sleep(0.1)
             continue
-        check_console()
-        z80emu.run_steps(N_STEPS)
+        check_console(board, ch_in, ch_in_p)
+        z80emu.run_steps(steps_per_chunk)
 
         # Performance monitoring at startup
-        iters += N_STEPS
+        iters += steps_per_chunk
         if iters > N and tstart > 0:
             tstop = time.time()
             print(f"Ran {iters:_} steps in {tstop-tstart:.3f} seconds ({iters/(tstop-tstart):_} steps/s)")
             sys.stdout.flush()
             tstart = 0  # disable
-
-
 
 
 def dump_mem(fname):
@@ -862,27 +856,33 @@ class PromRegion:
 
 class Board:
     btypes = {}
-    def __init__(self, config):
+    def __init__(self, config, d_imgs):
         self.config = config
+        self.d_imgs = d_imgs
         # Set up I/O address space
         self.io_ports = defaultdict(IOPrint)
         self.proms = []
 
     def set_proms_enabled(self, enabled):
-        print("-- NB: Board setting proms to {enabled} = ", "enabled" if enabled else "disabled")
+        print("-- NB: Board setting proms to", "enabled" if enabled else "disabled")
         for prom in self.proms:
             prom.set_enabled(enabled)
 
+    def io_in(self, port):
+        return self.io_ports[port].read(port)
+
+    def io_out(self, port, val):
+        self.io_ports[port].write(port, val)
+
 
 class Board1001(Board):
-    def __init__(self, config):
-        super().__init__(config)
-        self.sport = IOSerialDim1001(args.to)
+    def __init__(self, config, d_imgs):
+        super().__init__(config, d_imgs)
+        self.sport = IOSerialDim1001(open(config['console_out'], 'wb', buffering=0))
         self.sport.register_ports(self.io_ports)
 
         # Dim 1001 uses only one prom chip.
-        self.proms.append(PromRegion(Path(args.c, config['prom0']), 0x0))
-        self.set_proms_enabled(True)
+        self.proms.append(PromRegion(Path(config['run-dir'], config['prom0']), 0x0))
 
         # TODO: this probably won't work yet.
         # The disk controller appears to be mapped to the same ports
@@ -895,9 +895,10 @@ class Board1001(Board):
 
 
 class Board1003(Board):
-    def __init__(self, config):
-        super().__init__(config)
-        self.sport = IOSerial(args.to)
+    def __init__(self, config, d_imgs):
+        super().__init__(config, d_imgs)
+        self.sport = IOSerial(open(config['console_out'], 'wb', buffering=0))
+
         self.sport.register_ports(self.io_ports)
         self.pport = IOPar()
         self.pport.register_ports(self.io_ports)
@@ -909,9 +910,8 @@ class Board1003(Board):
         self.iop14.register_ports(self.io_ports)
 
         # Dim 1003 uses two proms. The second one is mapped at 0x1000, leaving a region of RAM between the chips.
-        self.proms.append(PromRegion(Path(args.c, config['prom0']), 0x0))
-        self.proms.append(PromRegion(Path(args.c, config['prom1']), 0x1000))
-        self.set_proms_enabled(True)
+        self.proms.append(PromRegion(Path(config['run-dir'], config['prom0']), 0x0))
+        self.proms.append(PromRegion(Path(config['run-dir'], config['prom1']), 0x1000))
 
         self.dsk = IODiskController(d_imgs)
         self.dsk.register_ports(self.io_ports)
@@ -927,78 +927,92 @@ def parse_args():
     parser.add_argument("-c", default="run-tst", help="Config directory path (and where disk images are stored)")
     parser.add_argument("-ec", help="path to connect embedded python console to")
     args = parser.parse_args()
+    return args
 
+def make_config():
+    """Reads config file and adds information from args to the config"""
+    args = parse_args()
     if args.t:
         # Use the same pty for both input and output
         args.ti = args.t
         args.to = args.t
 
-    return args
+    if (not args.ti) or (not args.to):
+        raise SystemExit(f"Please specify -t, or specify both -ti and -to")
+
+    config = read_config(args.c)
+
+    # Maybe not the cleanest yet, but this is a step towards a single
+    # config environment without having to deal with arg parsing.
+    config['run-dir'] = args.c
+    config['console_in'] = args.ti
+    config['console_out'] = args.to
+    config['script']      = args.script
+    config['embedded_console'] = args.ec
+    print(config)
+    return config
 
 
-args = parse_args()
-if (not args.ti) or (not args.to):
-    raise SystemExit(f"Please specify -t, or specify both -ti and -to")
+def main():
+    config = make_config()
+
+    # TODO: Hack since there is currently no clean way of failing if a
+    # non-existing disk is requested in the controller. The emulator currently
+    # just crashes.
+    # This adds some default images, with write-through if any image is modified.
+    # Non-existing images will be created on the disk on the first write.
+    print("Using disk image(s) from", config['disk-images'])
+    d_imgs = [diskimage.DiskImage.from_file(dname) for dname in config['disk-images']]
+    d_imgs += [diskimage.DiskImage.empty_image(Path(config['run-dir']) / f"disk-{i:02}.img")
+               for  i in range(len(d_imgs),8)]
+
+    board = {
+        'dim-1001' : Board1001,
+        'dim-1003' : Board1003
+    }[config['board']](config, d_imgs)
+
+    set_in_callback(board.io_in)
+    set_out_callback(board.io_out)
+
+    if config['script'] in ["t", "true"]:
+        # Add some strings to automate testing
+        # NB: no return after the command as the keypress would abort the dump before completion
+        board.sport.queue_string(0.1, "D" + "1000" + "1020")
+        # L needs a "return" to work.
+        # NB: L loads AND runs the program!
+        board.sport.queue_string(1.0, "L1CPM2.2W\r")
+        board.sport.queue_string(2.0, "dir\r")
+        board.sport.queue_string(3.0, "mycrop\r")
+        board.sport.queue_string(4.0, "L1CPM2.2W\r")
+        # Calls 110e (BDO)
+        # Emulates a disk write of data from 0x3000 to disk 04... TODO: this is broken. Use z80asm to create a new one.
+        # board.sport.queue_string(4, "S2000F5D5C53E0432D70FCD0E113E0406020E0216001E00210030CD8500F53AD70FCD4911F101CD0000\r")
+        # board.sport.queue_string(5, "G2000\r")
+    elif config['script']:
+        print("Adding script", args.script)
+        board.sport.queue_string(0.3, args.script)
+    # sport.queue_string(0.1, "D" + "1000" + "1010")
+
+    # Slightly hacky, but this lets us read from the serial port and put it in the
+    # queue of the emulator's serial port.
+    # NB: need to set it to binary + unbuffered, otherwise terminal input will be buffered and not work properly
+    ch_in = open(config['console_in'], 'rb', 0)
+    ch_in_p = select.poll()
+    ch_in_p.register(ch_in.fileno(), select.POLLIN)
+
+    # If embedded console:
+    if (ec_fn := config['embedded_console']):
+        # Give it everything
+        console_server = start_pty_console(ec_fn, globals() | locals())
+
+    # track cpm loading
+    # z80emu.mem_set_track_mask(0xee00, 0xffff, z80emu.TRACK_EXEC)
+
+    run_sim(board, ch_in, ch_in_p)
+
+    return 0
 
 
-config = read_config(args.c)
-print(config)
-
-z80emu.reset()
-
-# TODO: Hack since there is currently no clean way of failing if a non-existing disk is requested in the controller.
-# currently, the emulator just crashes. This adds some default images.
-# A future update might consider pausing the emulator to let the user create the file, or ask the user
-# if a file should be created. Another option is to provide a flag to control if dirty images should be
-# written back to the file system (write through for existing images, dump entire empty img + write through
-# for non-existing images).
-print("Using disk image(s) from", config['disk-images'])
-d_imgs = [diskimage.DiskImage.from_file(dname) for dname in config['disk-images']]
-d_imgs += [diskimage.DiskImage.empty_image(Path(args.c) / f"disk-{i:02}.img")
-           for  i in range(len(d_imgs),8)]
-
-btypes = {
-    'dim-1001' : Board1001,
-    'dim-1003' : Board1003
-}
-board = btypes[config['board']](config)
-
-set_in_callback(io_in)
-set_out_callback(io_out)
-
-if args.script in ["t", "true"]:
-    # Add some strings to automate testing
-    # NB: no return after the command as the keypress would abort the dump before completion
-    board.sport.queue_string(0.1, "D" + "1000" + "1020")
-    # L needs a "return" to work.
-    # NB: L loads AND runs the program!
-    board.sport.queue_string(1.0, "L1CPM2.2W\r")
-    board.sport.queue_string(2.0, "dir\r")
-    board.sport.queue_string(3.0, "mycrop\r")
-    board.sport.queue_string(4.0, "L1CPM2.2W\r")
-    # Calls 110e (BDO) 
-    # Emulates a disk write of data from 0x3000 to disk 04... TODO: this is broken. Use z80asm to create a new one.
-    # board.sport.queue_string(4, "S2000F5D5C53E0432D70FCD0E113E0406020E0216001E00210030CD8500F53AD70FCD4911F101CD0000\r")
-    # board.sport.queue_string(5, "G2000\r")
-elif args.script:
-    print("Adding script", args.script)
-    board.sport.queue_string(0.3, args.script)
-# sport.queue_string(0.1, "D" + "1000" + "1010")
-
-
-# Slightly hacky, but this lets us read from the serial port and put it in the
-# queue of the emulator's serial port.
-# NB: need to set it to binary + unbuffered, otherwise terminal input will be buffered and not work properly
-ch_in = open(args.ti, 'rb', 0)
-ch_in_p = select.poll()
-ch_in_p.register(ch_in.fileno(), select.POLLIN)
-
-# If embedded console:
-if args.ec:
-    # Give it everything
-    console_server = start_pty_console(args.ec, globals())
-
-# track cpm loading
-# z80emu.mem_set_track_mask(0xee00, 0xffff, z80emu.TRACK_EXEC)
-
-run_sim()
+if __name__ == "__main__":
+    z80emu.reset()
+    raise SystemExit(main())

@@ -112,11 +112,21 @@ class DiskImage:
         with open(fname, 'wb') as f:
             f.write(self.barr)
 
+    def _get_offset(self, track, sector):
+        if not 0 <= track < TRACKS:
+            raise ValueError(f"invalid track: {track}")
+        if not 1 <= sector <= SECTORS:
+            raise ValueError(f"invalid sector: {sector}")
+        return ((track * SECTORS) + (sector - 1)) * SECTOR_SIZE
+
     def read_sector(self, track, sector):
-        """NB: sectors are numbered 1..26"""
-        assert 1 <= sector <= SECTORS
-        assert 0 <= track < TRACKS
-        offset = ((track * SECTORS) + (sector - 1)) * SECTOR_SIZE
+        """NB: sectors are numbered 1..26.
+        Uses "read-through" semantics if the disk image exists
+        (ignores buffer and reads directly from the file) to support
+        floopy change by simply overwriting or replacing the
+        file.
+        """
+        offset = self._get_offset(track, sector)
         if self._read_source == ReadSource.FILE and os.path.isfile(self.fname):
             with open(self.fname, 'rb') as f:
                 f.seek(offset)
@@ -126,17 +136,18 @@ class DiskImage:
                     data += bytes(SECTOR_SIZE - len(data))
                 # update local image even if we don't use it.
                 self.barr[offset:offset + SECTOR_SIZE] = data
-                return data
-        else:
-            return self.barr[offset:offset + SECTOR_SIZE]
+
+        return self.barr[offset:offset + SECTOR_SIZE]
 
     def write_sector(self, track, sector, data, flush=False):
-        """NB: sectors are numbered 1..26"""
-        assert 1 <= sector <= SECTORS
-        assert 0 <= track < TRACKS
+        """NB: sectors are numbered 1..26
+        Uses "write-through" semantics.
+        If the file does not exist, creates the file and dumps the entire
+        disk image to the file.
+        """
         assert len(data) == SECTOR_SIZE
         assert isinstance(data, (bytes, bytearray))
-        offset = ((track * SECTORS) + (sector - 1)) * SECTOR_SIZE
+        offset = self._get_offset(track, sector)
         self.barr[offset:offset + SECTOR_SIZE] = data
         if flush:
             try:
@@ -322,7 +333,7 @@ if __name__ == "__main__":
     args = parse_args()
     for fn in args.mp:
         print("Making prog test image", fn)
-        prog_make_test_img(fn).save()        
+        prog_make_test_img(fn).save()
     for fn in args.md:
         print("Making data test image", fn)
         data_make_test_img(fn).save()

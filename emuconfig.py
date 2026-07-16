@@ -29,7 +29,6 @@ def read_config(dname):
 
     return conf
 
-
 if __name__ == "__main__":
     conf = read_config("run-tst")
     print(conf)
