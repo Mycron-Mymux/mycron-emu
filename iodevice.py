@@ -30,10 +30,10 @@ class IOPrint(IODevice):
     a write is requested.
     Additionally prints OUT and INP to the console for debugging."""
     def write(self, port, val):
-        emu_trace.write(f"OUT [{port:02x}] = {val:02x}", pc_offset=PC_OFFSET_STD_IO)
+        emu_trace.write(f"OUT [{port:02x}] = {val:02x}", pc_offset=emu_trace.PC_OFFSET_STD_IO)
 
     def read(self, port):
-        emu_trace.write(f"INP [{port:02x}] : 0x{self.default_rval:x}", pc_offset=PC_OFFSET_STD_IO)
+        emu_trace.write(f"INP [{port:02x}] : 0x{self.default_rval:x}", pc_offset=emu_trace.PC_OFFSET_STD_IO)
         return self.default_rval
 
 
