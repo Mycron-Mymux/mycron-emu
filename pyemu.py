@@ -422,7 +422,7 @@ class DiskDrive:
         if self.dpos == 0:
             # Make sure there is a freshly read sector here (to enable swapping disks)
             # TODO: could perhaps just move this to "start"
-            disk_trace.debug(f"RD_SECTOR dsk=%d sector %02d.%02d.. %s",
+            disk_trace.debug("RD_SECTOR dsk=%d sector %02d.%02d.. %s",
                           self.dno,
                           self.track,
                           self.sector,
@@ -773,7 +773,6 @@ def run_sim(board, ch_in, ch_in_p, steps_per_chunk=1000):
         if iters > N and tstart > 0:
             tstop = time.time()
             log.info(f"Ran {iters:_} steps in {tstop-tstart:.3f} seconds ({iters/(tstop-tstart):_} steps/s)")
-            sys.stdout.flush()
             tstart = 0  # disable
 
 

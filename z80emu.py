@@ -197,7 +197,7 @@ def raw_memory():
 
 
 def memory_snapshot():
-    """Returns a snapshot/copy of the full 65 KiB memory."""
+    """Returns a snapshot/copy of the full 64 KiB memory."""
     return bytes(raw_memory())
 
 

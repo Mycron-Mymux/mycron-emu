@@ -53,22 +53,21 @@ other to the terminal program.
 ### A serial communication program
 
 I'm just using minicom, but other programs should work.
+Examples with minicom and tio:
 
-    `minicom -D /dev/pts/<xxx> -b 9600`
-
-There are some problems with some UTF characters crashing the emulator.
-I haven't dug into this yet.
+- `minicom -D /dev/pts/<xxx> -b 9600`
+- `tio -b 9600 /dev/pts/<xxx>`
 
 If you want a nice and cozy feeling while playing with the emulator,
 it may be an idea to look into cool-retro-term and run minicom inside
 that. I have had mixed results with running the apt version of
-cool-retro-term (incorrect draing of window backgrounds, for
+cool-retro-term (incorrect drawing of window backgrounds, for
 instance), but recompiling the binary myself seemed to work better.
 
 
-### Using the python console
+### Using the Python debug console
 
-A python console has been added to the emulator.
+An optional Python console has been added to the emulator.
 
 You can set up an extra set of ptys using another socat similar to the
 method used for the Mycron console above.
@@ -82,8 +81,7 @@ Python prompt.
 Other options to connect to the console include (if 77 is the "other end"):
 - `socat - /dev/pts/77,raw,echo=0`
 - `rlwrap -a socat - /dev/pts/77,raw,echo=0`
-- tio
-
+- `tio /dev/pts/77`
 
 The rlwrap version is probably the one that comes closest to a normal
 Python console, although it is not a fully supported console with
