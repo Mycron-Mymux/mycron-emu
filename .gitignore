@@ -2,6 +2,7 @@
 __pycache__
 build
 disk-imgs/
+mycronemu.egg-info
 run-tst*/*.img
 run-tst-*/
 run-tst/disk-imgs
