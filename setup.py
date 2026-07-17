@@ -11,6 +11,8 @@ setup(
         "diskimage",
         "emuconfig",
         "embedded_console",
+        "emu_logging",
+        "emu_trace",
     ],
     setup_requires=[
         "cffi>=1.15",

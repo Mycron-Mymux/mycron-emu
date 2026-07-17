@@ -1,3 +1,8 @@
-build
+*.so
 __pycache__
+build
+disk-imgs/
+run-tst*/*.img
+run-tst-*/
+run-tst/disk-imgs
 z80dist/z80em.zip

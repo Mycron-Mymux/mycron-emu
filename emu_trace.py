@@ -7,7 +7,7 @@ from z80emu import mem_dis, get_regs
 
 
 trace_log = logging.getLogger("mycron.trace")
-trace_log.setLevel(logging.INFO)
+
 
 def regs_str(regs=None):
     """Returns a dict with regs and a string rep of regs with hex values"""
@@ -52,13 +52,15 @@ def pc_disasm_str(pc_offset=0):
         return f"PC=???? <disassembly failed: {error}>"
 
 
-def write(message, *, include_regs=False, pc_offset=0):
+def write(message, *, include_regs=False, include_stack=False, pc_offset=0):
     """Trace write..
     NB: see notes about pc_disasm_str(). It might return the _next_ instruction.
     """
     text = f"{message} {pc_disasm_str(pc_offset)}"
 
-    if include_regs:
+    if include_stack:
+        text += " " + regs_stack_str()
+    elif include_regs:
         text += "  " + regs_str()
 
     trace_log.debug(text)

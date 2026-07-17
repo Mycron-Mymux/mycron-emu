@@ -27,10 +27,11 @@ from contextlib import contextmanager
 from pathlib import Path
 import argparse
 import logging
+from types import NoneType
 import z80emu
 from z80emu import set_in_callback, set_out_callback, mem_dis, mem_rd, get_regs, mem_set_prot
 import diskimage
-from emuconfig import read_config
+from emuconfig import read_config, read_console_script
 from embedded_console import start_pty_console
 from emu_logging import configure_logging
 import emu_trace
@@ -42,9 +43,11 @@ PC_OFFSET_STD_IO = -2
 
 
 log = logging.getLogger("mycron.status")
-log_disk = logging.getLogger("mycron.disk")
-log_io = logging.getLogger("mycron.trace.io")
-log.setLevel(logging.INFO)
+io_log = logging.getLogger("mycron.io")
+disk_log = logging.getLogger("mycron.disk")
+
+io_trace = logging.getLogger("mycron.trace.io")
+disk_trace = logging.getLogger("mycron.trace.disk")
 
 
 class IODevice:
@@ -122,7 +125,7 @@ class IOP14(IODevice):
     def __init__(self, board, default_rval=0x9b):
         super().__init__(default_rval=default_rval)
         self.board = board
-        log_io.info(f"IO14 device initialized with default rval={self.default_rval:#x}. TODO: see comments.")
+        io_log.info(f"IO14 device initialized with default rval={self.default_rval:#x}. TODO: see comments.")
 
     def write(self, port, val):
         emu_trace.write(f"IO14_OUT [{port:02x}] = {val:02x}", pc_offset=PC_OFFSET_STD_IO)
@@ -169,7 +172,7 @@ class IOCTC(IOIgnore):
         if val & 0x1:
             # control
             if val & 0x80:
-                log_io.warning("-- NB: wanted interrupt")
+                io_log.warning("-- NB: wanted interrupt")
     def read(self, port):
         emu_trace.write(f"IOCTC INP [{port:02x}] : 0x{self.default_rval:x}", pc_offset=PC_OFFSET_STD_IO)
         return self.default_rval
@@ -252,10 +255,10 @@ class IOSerial(IODevice):
             # 0 is typically used when polling
             emu_trace.write(f"IOSER  OUT[{port:2x}] = {val:2x},  ser_BC reg was {self.next_reg[self.BC]:2x}: ",
                             pc_offset=PC_OFFSET_STD_IO)
-            # log_io.info(f"IOSER write CB reg {self.next_reg[self.BC]} - {port:2x} {val:2x}")
+            # io_trace.debug(f"IOSER write CB reg {self.next_reg[self.BC]} - {port:2x} {val:2x}")
             if self.next_reg[self.BC] == 0:
                 if val & 0x7 > 0:
-                    # log_io.info(f"IOSER --- next reg is {val&0x7}")
+                    # io_trace.debug(f"IOSER --- next reg is {val&0x7}")
                     self.next_reg[self.BC] = val & 0x7
             else:
                 self.next_reg[self.BC] = 0
@@ -284,10 +287,10 @@ class IOSerial(IODevice):
         if port == self.BD:
             if self.input_bytes:
                 return self.input_bytes.popleft()
-            log_io.warning(f"WARNING: read from empty serial port {port}. Returning 0 {pc_disasm_str()}")
+            io_log.warning(f"read from empty serial port {port}. Returning 0 {pc_disasm_str()}")
             return 0
 
-        log_io.warning(f"WARNING ({self}): unknown port {port}. Supporting one of {self.BD=} {self.BC=} {pc_disasm_str()}")
+        io_log.warning(f"({self}): unknown port {port}. Supporting one of {self.BD=} {self.BC=} {pc_disasm_str()}")
         return 0
 
 
@@ -419,7 +422,7 @@ class DiskDrive:
         if self.dpos == 0:
             # Make sure there is a freshly read sector here (to enable swapping disks)
             # TODO: could perhaps just move this to "start"
-            log_disk.info(f"RD_SECTOR dsk=%d sector %02d.%02d.. %s",
+            disk_trace.debug(f"RD_SECTOR dsk=%d sector %02d.%02d.. %s",
                           self.dno,
                           self.track,
                           self.sector,
@@ -435,7 +438,7 @@ class DiskDrive:
             self.dpos += 1
             if self.dpos == self.SECTOR_D_SIZE:
                 self.set_at_state(False, True)
-                # log_disk.debug(f"DSK_READ_SECT_COMPLETE {self.track:02}.{self.sector:02} : {self.data} {pc_disasm_str(PC_OFFSET_STD_IO)}")
+                # disk_trace.debug(f"DSK_READ_SECT_COMPLETE {self.track:02}.{self.sector:02} : {self.data} {pc_disasm_str(PC_OFFSET_STD_IO)}")
             return ret
 
         # TODO: potential for infinite loop, but prom seems to start a new read after crc
@@ -444,7 +447,7 @@ class DiskDrive:
 
     def read(self):
         """Reads one byte."""
-        # log_disk.debug("DSK_read", self)
+        # disk_trace.debug("DSK_read", self)
         match self.state:
             case self.ST_HDR:
                 return self._read_header()
@@ -462,7 +465,7 @@ class DiskDrive:
                 f"expected {self.SECTOR_D_SIZE} bytes, got {len(self.wbuf)}"
             )
         self.data = bytes(self.wbuf)
-        # log_disk.debug(f"DSK_WRITE_SECT_COMPLETE {self.track:02}.{self.sector:02} : {self.data}")
+        # disk_trace.debug(f"DSK_WRITE_SECT_COMPLETE {self.track:02}.{self.sector:02} : {self.data}")
         self.disk_img.write_sector(self.track, self.sector, self.data, flush=True)
 
     def write_add_byte(self, bval):
@@ -576,7 +579,7 @@ class IODiskController(IODevice):
                     self.sector = 1
 
     def write_cw1(self, val):
-        # log_disk.debug(f"DSK_WRITE_CW1 f{val:#02x}")
+        # disk_trace.debug(f"DSK_WRITE_CW1 f{val:#02x}")
         match val:
             # NB: both read_hdr and read__data run the 41 49 sequence!
             case 0x41:
@@ -584,7 +587,7 @@ class IODiskController(IODevice):
             case 0x49:
                 self.rd_state = self.RD_ST_RUN
                 if self.drive is None:
-                    log_disk.warning("WARNING: drive was none in write_cw1")
+                    disk_log.warning("WARNING: drive was none in write_cw1")
                     self.drive = self.drives[self.drive_no]
                 # TODO: self.drive should never be none here.
                 if self.drive.track != self.track or self.drive.sector != self.sector:
@@ -600,23 +603,23 @@ class IODiskController(IODevice):
                 # C9 is WR=1, /LD=1, WG=0,
                 # see dsk_write_sector_data. A write sector starts with
                 # C9 to CW1, then C0 to CW2
-                # log_disk.debug("TODO: Trying disk write (C9 to CW1)")
+                # disk_trace.debug("TODO: Trying disk write (C9 to CW1)")
                 self.wr_state = self.WR_ST_1
             case 0xa1:
                 self.wr_state = self.WR_ST_3
-                # log_disk.debug("TODO: wr_state now", self.wr_state)
+                # disk_trace.debug("TODO: wr_state now", self.wr_state)
             case 0xa8:
                 self.wr_state = self.WR_ST_4
-                # log_disk.debug("TODO: wr_state now", self.wr_state)
+                # disk_trace.debug("TODO: wr_state now", self.wr_state)
             case 0xa9:
                 self.wr_state = self.WR_ST_DATA
-                # log_disk.debug("TODO: wr_state now", self.wr_state)
+                # disk_trace.debug("TODO: wr_state now", self.wr_state)
                 # Fetch current sector and prepare it for writing
                 self.set_sector(self.drive_no, self.track, self.sector)
                 self.drive.prepare_write()
             case 0xad:
                 self.wr_state = self.WR_ST_OFF
-                # log_disk.debug("TODO: wr_state now", self.wr_state, 'Write done, so commiting and ignoring the rest')
+                # disk_trace.debug("TODO: wr_state now", self.wr_state, 'Write done, so commiting and ignoring the rest')
                 self.drive.commit_write()
 
 
@@ -655,7 +658,7 @@ class IODiskController(IODevice):
                 if self.wr_state == self.WR_ST_DATA:
                     self.drive.write_add_byte(val)
             case _:
-                log_disk.warning(f"DSK_WRITE_unknown: {port=:#x} {val=:#x} {pc_disasm_str(PC_OFFSET_STD_IO)}")
+                disk_log.warning(f"DSK_WRITE_unknown: {port=:#x} {val=:#x} {pc_disasm_str(PC_OFFSET_STD_IO)}")
         if self.verbose:
             st = f"DSK_OUT {pre:10} [{port:02x}] = {val:02x}.  rdstate {_org_rd_state}->"
             st += f"{self.rd_state} wstate {self.wr_state} T={self.track} S={self.sector}  {self.drive_no}"
@@ -894,15 +897,16 @@ class Board1003(Board):
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(argv)
+    parser = argparse.ArgumentParser()
     parser.add_argument("-t", help="Console I/O. Use if input and output are to the same device.")
     parser.add_argument("-ti", help="Console input")
     parser.add_argument("-to", help="Console output")
-    parser.add_argument("-script", help="Script to send to the console input.")
+    parser.add_argument("--script", metavar="FILE", help="Console script file; overrides the run-directory configuration")
+    parser.add_argument("--send", metavar="TEXT", help="Script to send to the console after startup.")
     # parser.add_argument("--disk", nargs='+')
     parser.add_argument("-c", default="run-tst", help="Config directory path (and where disk images are stored)")
     parser.add_argument("-ec", help="path to connect embedded python console to")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     return args
 
 def make_config(argv=None):
@@ -923,10 +927,23 @@ def make_config(argv=None):
     config['run-dir'] = args.c
     config['console_in'] = args.ti
     config['console_out'] = args.to
-    config['script']      = args.script
+    config['script_arg']      = args.script
+    config['send']        = args.send
     config['embedded_console'] = args.ec
     log.debug(config)
     return config
+
+
+def schedule_config_script(board, config):
+    script_name = config.get("script")
+    if not script_name:
+        return
+
+    script_path = Path(config["run-dir"]) / script_name
+    log.info("Loading console script %s", script_path)
+
+    for delay, data in read_console_script(script_path):
+        board.sport.schedule_bytes(delay, data)
 
 
 BOARD_TYPES = {
@@ -936,8 +953,8 @@ BOARD_TYPES = {
 
 
 def main():
-    config = make_config()
     configure_logging(trace_enabled=True)
+    config = make_config()
 
     # TODO: Hack since there is currently no clean way of failing if a
     # non-existing disk is requested in the controller. The emulator currently
@@ -966,24 +983,12 @@ def main():
         set_in_callback(board.io_in)
         set_out_callback(board.io_out)
 
-        if config['script'] in ["t", "true"]:
-            # Add some strings to automate testing
-            # NB: no return after the command as the keypress would abort the dump before completion
-            board.sport.schedule_bytes(0.1, "D" + "1000" + "1020")
-            # L needs a "return" to work.
-            # NB: L loads AND runs the program!
-            board.sport.schedule_bytes(1.0, "L1CPM2.2W\r")
-            board.sport.schedule_bytes(2.0, "dir\r")
-            board.sport.schedule_bytes(3.0, "mycrop\r")
-            board.sport.schedule_bytes(4.0, "L1CPM2.2W\r")
-            # Calls 110e (BDO)
-            # Emulates a disk write of data from 0x3000 to disk 04... TODO: this is broken. Use z80asm to create a new one.
-            # board.sport.schedule_bytes(4, "S2000F5D5C53E0432D70FCD0E113E0406020E0216001E00210030CD8500F53AD70FCD4911F101CD0000\r")
-            # board.sport.schedule_bytes(5, "G2000\r")
-        elif config['script']:
-            log.info("Adding script %s", config['script'])
-            board.sport.schedule_bytes(0.3, config['script'])
-        # sport.schedule_bytes(0.1, "D" + "1000" + "1010")
+        if config['send']:
+            board.sport.schedule_bytes(0.3, config['send'])
+        if config['script_arg']:
+            for delay, data in read_console_script(config['script_arg']):
+                board.sport.schedule_bytes(delay, data)
+        schedule_config_script(board, config)
 
         # Slightly hacky, but this lets us read from the serial port and put it in the
         # queue of the emulator's serial port.

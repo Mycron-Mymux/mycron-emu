@@ -27,8 +27,8 @@ static int irq_line_active = 0;
 static byte irq_vector = 0xff;
 
 
-// -------------------- io callbacks --------------------
-static void emu_log(const char *format, ...)
+// -------------------- diagnostics --------------------
+static void emu_trace(const char *format, ...)
 {
     va_list args;
 
@@ -116,8 +116,8 @@ static Z80EX_BYTE emu_mread_cb(
         char txt[120];
         emu_disasm(pc, txt, sizeof(txt));
 
-        emu_log("RD %04x -> %02x pc %04x instr: %s\n",
-               a, val, pc, txt);
+        emu_trace("RD %04x -> %02x pc %04x instr: %s\n",
+                  a, val, pc, txt);
     }
 
     return val;
@@ -147,12 +147,12 @@ static void emu_mwrite_cb(
         char txt[120];
         emu_disasm(pc, txt, sizeof(txt));
 
-        emu_log("WR %04x : %02x -> %02x pc %04x instr: %s\n",
+        emu_trace("WR %04x : %02x -> %02x pc %04x instr: %s\n",
                a, memory[a], v, pc, txt);
     }
 
     if (memory_prot[a]) {
-        emu_log("WR---ignore write to protected addr %04x wr %02x\n", a, v);
+        emu_trace("WR---ignore write to protected addr %04x wr %02x\n", a, v);
         return;
     }
 
@@ -176,7 +176,7 @@ static Z80EX_BYTE emu_pread_cb(
     byte p = port & 0xff;
 
     if (cb_io_in == NULL) {
-        emu_log("Z80_In %02x\n", p);
+        emu_trace("Z80_In %02x\n", p);
         return 0;
     }
 
@@ -198,7 +198,7 @@ static void emu_pwrite_cb(
     byte v = value & 0xff;
 
     if (cb_io_out == NULL) {
-        emu_log("Z80_Out %02x <- %02x\n", p, v);
+        emu_trace("Z80_Out %02x <- %02x\n", p, v);
         return;
     }
 
@@ -283,8 +283,8 @@ static void emu_step(void)
         char txt[120];
         emu_disasm(pc, txt, sizeof(txt));
 
-        emu_log("TRACK_EXEC: about to execute instruction at %04x: %s\n",
-               pc, txt);
+        emu_trace("TRACK_EXEC: about to execute instruction at %04x: %s\n",
+                  pc, txt);
     }
 
     /*
@@ -342,8 +342,8 @@ void z80emu_mem_set_prot(unsigned int start, unsigned int end, byte value)
         return;
     }
 
-    emu_log("Setting memory protection for region 0x%x to 0x%x to %d\n",
-           start, end, value);
+    emu_trace("Setting memory protection for region 0x%x to 0x%x to %d\n",
+              start, end, value);
 
     for (unsigned int a = start; a < end; a++) {
         memory_prot[a] = value;
@@ -371,7 +371,7 @@ void z80emu_mem_unset_track_mask(unsigned int start, unsigned int end, byte mask
     if (start > Z80_MEM_SIZE ||
         end > Z80_MEM_SIZE ||
         start > end) {
-        emu_warn("WARNING: illegal mem_set_track_mask addr range: %d -> %d -- ignoring range\n", start, end);
+        emu_warn("WARNING: illegal mem_unset_track_mask addr range: %d -> %d -- ignoring range\n", start, end);
         return;
     }
 

@@ -327,7 +327,7 @@ def test():
         img3.save()
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(argv)
+    parser = argparse.ArgumentParser()
     parser.add_argument("-mp", nargs=1, default=[],
                         help="Create a Mycron prog disk image and store it to he given file name")
     parser.add_argument("-md", nargs=1, default=[],
@@ -336,7 +336,7 @@ def parse_args(argv=None):
                         help="Create an emptydisk image and store it to he given file name")
     parser.add_argument("-t", action="store_true",
                         help="Run some simple tests")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 if __name__ == "__main__":
     args = parse_args()
