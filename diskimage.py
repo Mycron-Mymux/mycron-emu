@@ -12,7 +12,6 @@ Which is a total of 77 * 26 * 128 = 256256 bytes
 - bytearray(bytes) - > bytearrays are not read only
 """
 
-import os
 import argparse
 import logging
 
@@ -96,8 +95,8 @@ class DiskImage:
         self._read_from_file = read_from_file
 
     @classmethod
-    def empty_image(cls, name="NA"):
-        return cls(name, bytes(IMG_LEN))
+    def empty_image(cls, name="NA", read_from_file=False):
+        return cls(name, bytes(IMG_LEN), read_from_file=read_from_file)
 
     @classmethod
     def from_file(cls, fname):

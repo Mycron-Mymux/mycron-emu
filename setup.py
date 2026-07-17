@@ -3,16 +3,18 @@
 from setuptools import setup
 
 setup(
-    name="z80emu",
+    name="mycronemu",
     version="0.0.1",
     py_modules=[
-        "z80emu",
-        "pyemu",
+        "diskcontroller",
         "diskimage",
-        "emuconfig",
         "embedded_console",
         "emu_logging",
         "emu_trace",
+        "emuconfig",
+        "iodevice",
+        "pyemu",
+        "z80emu",
     ],
     setup_requires=[
         "cffi>=1.15",

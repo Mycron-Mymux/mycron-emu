@@ -6,6 +6,10 @@ import z80emu
 from z80emu import mem_dis, get_regs
 
 
+# most instructions of the type  IN A, OUT A should be 2 bytes.
+# This should cover most io cases
+PC_OFFSET_STD_IO = -2
+
 trace_log = logging.getLogger("mycron.trace")
 
 
