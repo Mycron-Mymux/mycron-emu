@@ -28,6 +28,7 @@ from pathlib import Path
 import argparse
 import logging
 from types import NoneType
+from typing import dataclass_transform
 import z80emu
 from z80emu import set_in_callback, set_out_callback, mem_dis, mem_rd, get_regs, mem_set_prot
 import diskimage
@@ -351,6 +352,55 @@ class DiskDrive:
                 self.state = self.ST_INACTIVE
                 self.set_at_state(False, False)
 
+
+    def set_position(self, track, sector):
+        if not 0 <= track < diskimage.TRACKS:
+            raise ValueError(f"invalid track: {track}")
+        if not 1 <= sector <= diskimage.SECTORS:
+            raise ValueError(f"invalid sector: {sector}")
+
+        self.track = track
+        self.sector = sector
+        self.reset()
+
+    def step_track(self, direction):
+        """Move the head one track.
+
+        direction > 0 moves inward; direction < 0 moves outward.
+        """
+
+        self.track = min(
+            max(self.track + direction, 0),
+            diskimage.TRACKS - 1,
+        )
+
+        # This preserves the controller's current simplified behavior.
+        self.sector = 1
+        self.reset()
+
+    def advance_sector(self):
+        """Advance the simulated rotational position by one sector."""
+
+        self.sector += 1
+        if self.sector > diskimage.SECTORS:
+            self.sector = 1
+
+        self.reset()
+
+    def begin_read_phase(self):
+        """Start the next header/data scanning phase.
+
+        The existing command sequence progresses as:
+
+            inactive -> header -> data -> next sector/header
+        """
+
+        if self.state == self.ST_DATA:
+            self.advance_sector()
+
+        self.start()
+
+
     def status_read(self):
         # Called by the controller when STATUS is read.
         # If the CPU has actually seen the address-mark bit, the next data read
@@ -476,9 +526,6 @@ class DiskDrive:
     def __repr__(self):
         return f"Disk({self.dno}, {self.track:02}.{self.sector:02}, m={self.at_mark}, crc={self.at_crc}, {self.state}, {self.hpos}, {self.dpos})"
 
-    def set_sector(self, track, sector):
-        self.track = track
-        self.sector = sector
 
 
 class IODiskController(IODevice):
@@ -543,7 +590,7 @@ class IODiskController(IODevice):
 
     def __init__(self, disk_imgs, **kvals):
         super().__init__(**kvals)
-        self.disk_imgs = disk_imgs
+        self.drives = {i : DiskDrive(i, img) for i, img in enumerate(disk_imgs)}
         # a particular sequence of writes to a specific port will move the head out or in.
         # state can
         # - always be ok + whether track is 0
@@ -552,53 +599,33 @@ class IODiskController(IODevice):
         # data reads:
         # - fake head and data mark ids as well as sector and track numbers
         self.drive_no = 0
-        # TODO: maybe move track and sector to the drive
-        self.track = 0
-        self.sector = 1
-        self.drive = None
-        self.rd_state = self.RD_ST_OFF    # 0 if not spitting out a sector, 1 if warming up and 2 if last init command issued
+        # 0 if not spitting out a sector, 1 if warming up and 2 if last init command issued
+        self.rd_state = self.RD_ST_OFF
         self.wr_state = self.WR_ST_OFF
-        self.drives = {i : DiskDrive(i, img) for i, img in enumerate(self.disk_imgs)}
 
-    def set_sector(self, dno, track, sector):
-        self.drive = self.drives[dno]
-        self.drive.set_sector(track, sector)
+    @property
+    def drive(self):
+        return self.drives[self.drive_no]
+
+    def select_drive(self, drive_no):
+        if drive_no not in self.drives:
+            raise ValueError(f"drive {drive_no} is not available")
+
+        self.drive_no = drive_no
 
     def pname(self, port):
         return self.pnames.get(port, "?? unk ??")
 
-    def _next_sector(self):
-        if self.drive is not None:
-            self.drive.reset()
-            # The start selects the next (if necessary) sector
-            if self.drive.track != self.track:
-                self.sector = 1
-            else:
-                self.sector += 1
-                if self.sector > self.N_SECTS:
-                    self.sector = 1
-
     def write_cw1(self, val):
         # disk_trace.debug(f"DSK_WRITE_CW1 f{val:#02x}")
+        drive = self.drive
         match val:
             # NB: both read_hdr and read__data run the 41 49 sequence!
             case 0x41:
                 self.rd_state = self.RD_ST_1
             case 0x49:
                 self.rd_state = self.RD_ST_RUN
-                if self.drive is None:
-                    disk_log.warning("WARNING: drive was none in write_cw1")
-                    self.drive = self.drives[self.drive_no]
-                # TODO: self.drive should never be none here.
-                if self.drive.track != self.track or self.drive.sector != self.sector:
-                    self.drive.set_sector(self.track, self.sector)
-                    self.drive.reset()
-                if self.drive.state == DiskDrive.ST_DATA:
-                    # About to make int inactive, so pick the next sector
-                    self._next_sector()
-                    self.drive.set_sector(self.track, self.sector)
-                    self.drive.reset()
-                self.drive.start()
+                drive.begin_read_phase()
             case 0xc9:
                 # C9 is WR=1, /LD=1, WG=0,
                 # see dsk_write_sector_data. A write sector starts with
@@ -612,35 +639,29 @@ class IODiskController(IODevice):
                 self.wr_state = self.WR_ST_4
                 # disk_trace.debug("TODO: wr_state now", self.wr_state)
             case 0xa9:
+                # Fetch current sector and prepare it for writing
                 self.wr_state = self.WR_ST_DATA
                 # disk_trace.debug("TODO: wr_state now", self.wr_state)
-                # Fetch current sector and prepare it for writing
-                self.set_sector(self.drive_no, self.track, self.sector)
-                self.drive.prepare_write()
+                drive.prepare_write()
             case 0xad:
+                drive.commit_write()
                 self.wr_state = self.WR_ST_OFF
                 # disk_trace.debug("TODO: wr_state now", self.wr_state, 'Write done, so commiting and ignoring the rest')
-                self.drive.commit_write()
-
 
     # When trying to set down head, it might try hex: 41, 51, 71, 51, then 01 when it gives up.
     # The last nibble 1 is for drive 1.
     # This is where the controller seelcts which disk to work with for the next commands.
     # CW2 writes. 50, 70, 50 -> step d1,  60, 40 ->  step d0
     def write_cw2(self, val):
-        self.drive_no = val & 7
-        self.drive = self.drives[self.drive_no]
+        self.select_drive(val & 7)
+        drive = self.drive
         # Simplified. Should really look for the sequence
         if (val & 0x70) == 0x70:
             # Next track
-            self.track = min(self.track + 1, self.N_TRACKS - 1)
-            self.sector = 1
-            self.drive.reset()
+            drive.step_track(+1)
         elif (val & 0x60) == 0x60:
             # Prev track
-            self.track = max(self.track - 1, 0)
-            self.sector = 1
-            self.drive.reset()
+            drive.step_track(-1)
         elif (val & 0xf0) == 0xc0:
             # TODO: strictly speaking, we could mask with 0xf0 since 0x8 is an NC bit
             self.wr_state = self.WR_ST_2
@@ -660,35 +681,37 @@ class IODiskController(IODevice):
             case _:
                 disk_log.warning(f"DSK_WRITE_unknown: {port=:#x} {val=:#x} {pc_disasm_str(PC_OFFSET_STD_IO)}")
         if self.verbose:
+            drive = self.drive
             st = f"DSK_OUT {pre:10} [{port:02x}] = {val:02x}.  rdstate {_org_rd_state}->"
-            st += f"{self.rd_state} wstate {self.wr_state} T={self.track} S={self.sector}  {self.drive_no}"
+            st += f"{self.rd_state} wstate {self.wr_state} T={drive.track} S={drive.sector}  {self.drive_no}"
             emu_trace.write(st, include_stack=True, pc_offset=PC_OFFSET_STD_IO)
 
     # A few simplifications compared to a real drive:
     # - instant track move and time to next pos
     # - always ready
     def _read_status(self):
-        val = 0
+        drive = self.drive
+        val = self.STATUS_DRY
 
-        if self.track == 0:
+        if drive.track == 0:
             val |= self.STATUS_T0
 
-        if self.drive is not None:
-            if self.drive.at_mark:
-                val |= self.STATUS_AM
-                self.drive.status_read()
+        if drive.at_mark:
+            val |= self.STATUS_AM
+            drive.status_read()
 
-            if self.drive.at_crc:
-                val |= self.STATUS_CRC
+        if drive.at_crc:
+            val |= self.STATUS_CRC
 
-        val |= self.STATUS_DRY
         return val
 
     def _read_data(self):
-        if self.rd_state != self.RD_ST_RUN or self.drive is None:
+        if self.rd_state != self.RD_ST_RUN:
             return 0
+
         if self.drive.done():
             return 0
+
         return self.drive.read()
 
     def read(self, port):
