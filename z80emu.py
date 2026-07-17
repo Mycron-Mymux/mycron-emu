@@ -248,7 +248,7 @@ def run_steps(n_steps=1000, chunk_size=10_000):
     if chunk_size <= 0:
         raise ValueError("chunk_size must be positive")
 
-    while n_steps:
+    while remaining:
         chunk = min(remaining, chunk_size)
         _lib.z80emu_run_steps(chunk)
         _raise_pending_callback_exception()

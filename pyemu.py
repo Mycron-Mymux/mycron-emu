@@ -285,7 +285,6 @@ class IOSerial(IODevice):
 
     def _release_scheduled_input(self):
         tnow = time.monotonic()
-
         while (self.scheduled_input
                and self.scheduled_input[0][0] <= tnow):
             _, data = heapq.heappop(self.scheduled_input)
@@ -835,7 +834,7 @@ class PromRegion:
     def __init__(self, fname, start_addr):
         self.fname = fname
         self.start_addr = start_addr
-        self.raw_data = open(fname, 'rb').read_bytes()
+        self.raw_data = open(fname, 'rb').read()
         self.ram_vals = bytes(len(self.raw_data))
         self.is_on = False
         self.turn_on()
@@ -998,7 +997,7 @@ def main():
         raise ValueError(f"disk controller supports at most 8 images, got {len(d_imgs)}")
 
     for drivenum in range(len(d_imgs), 8):
-        path = Path(config['run-dir']) / f"disk-{i:02}.img")
+        path = Path(config['run-dir']) / f"disk-{drivenum:02}.img"
         d_imgs.append(diskimage.DiskImage.empty_image(path))
 
     with open(config["console_in"], "rb", buffering=0) as console_in, \
@@ -1032,11 +1031,13 @@ def main():
             board.sport.schedule_bytes(0.3, config['script'])
         # sport.schedule_bytes(0.1, "D" + "1000" + "1010")
 
+        print("WWW 1")
         # Slightly hacky, but this lets us read from the serial port and put it in the
         # queue of the emulator's serial port.
         # NB: need to set it to binary + unbuffered, otherwise terminal input will be buffered and not work properly
         console_in_p = select.poll()
         console_in_p.register(console_in.fileno(), select.POLLIN)
+        print("WWW 2")
 
         # If embedded console:
         if (ec_fn := config['embedded_console']):
@@ -1046,6 +1047,7 @@ def main():
         # track cpm loading
         # z80emu.mem_set_track_mask(0xee00, 0xffff, z80emu.TRACK_EXEC)
         try:
+            print("NOW RUNNING")
             run_sim(board, console_in, console_in_p)
         except KeyboardInterrupt:
             print("\nEmulator stopped by keyboard interrupt.", file=sys.stderr)
