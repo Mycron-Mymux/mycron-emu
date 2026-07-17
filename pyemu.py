@@ -26,71 +26,25 @@ from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
 import argparse
+import logging
 import z80emu
 from z80emu import set_in_callback, set_out_callback, mem_dis, mem_rd, get_regs, mem_set_prot
 import diskimage
 from emuconfig import read_config
 from embedded_console import start_pty_console
+from emu_logging import configure_logging
+import emu_trace
+from emu_trace import regs_stack_str, regs_str, pc_disasm_str
 
 # most instructions of the type  IN A, OUT A should be 2 bytes.
 # This should cover most io cases
 PC_OFFSET_STD_IO = -2
 
 
-def regs_str(regs=None):
-    """Returns a dict with regs and a string rep of regs with hex values"""
-    rnames = ['PC', 'SP', 'AF', 'BC', 'DE', 'HL']
-    if regs is None:
-        regs = get_regs()
-    vals = ",".join(
-        f"{name}={regs[name]:x}"
-        for name in rnames
-        if name in regs)
-    return f"REGS_hex({vals})"
-
-
-def regs_stack_str():
-    regs = get_regs()
-    s = regs_str(regs)
-    sp = regs['SP']
-    s += " Stack: ["
-    s += " ".join([f"{mem_rd(sp + i):02x}" for i in range(10)])
-    s += "]"
-    return s
-
-
-def pc_disasm_str(pc_offset=0):
-    """
-    Return a short string with current PC and disassembly at PC.
-
-    Note: during an IN/OUT callback, depending on the Z80 backend, PC may
-    already point at the next instruction rather than the IN/OUT instruction.
-    Still useful for context.
-
-    To address this, you can add pc_offset=PC_OFFSET_STD_IO, which should address
-    most cases.
-    """
-    try:
-        regs = get_regs()
-        pc = (regs["PC"] + pc_offset) & 0xffff
-        offs = "" if pc_offset == 0 else f" PC offset {pc_offset}"
-        _, asm = mem_dis(pc)
-        return f"PC={pc:04x} {asm:14}{offs}"
-    except Exception as e:
-        return f"PC=???? <disasm failed: {e}>"
-
-
-def trace_write(msg, include_regs=False, include_stack=False, pc_offset=0):
-    """Trace write..
-    NB: see notes about pc_disasm_str(). It might return the _next_ instruction.
-    """
-    s = f"{msg} {pc_disasm_str(pc_offset)}"
-    if include_stack:
-        # also includes regs
-        s += "  " + regs_stack_str()
-    elif include_regs:
-        s += "  " + regs_str()
-    print(s)
+log = logging.getLogger("mycron.status")
+log_disk = logging.getLogger("mycron.disk")
+log_io = logging.getLogger("mycron.trace.io")
+log.setLevel(logging.INFO)
 
 
 class IODevice:
@@ -120,10 +74,10 @@ class IOPrint(IODevice):
     a write is requested.
     Additionally prints OUT and INP to the console for debugging."""
     def write(self, port, val):
-        trace_write(f"OUT [{port:02x}] = {val:02x}", pc_offset=PC_OFFSET_STD_IO)
+        emu_trace.write(f"OUT [{port:02x}] = {val:02x}", pc_offset=PC_OFFSET_STD_IO)
 
     def read(self, port):
-        trace_write(f"INP [{port:02x}] : 0x{self.default_rval:x}", pc_offset=PC_OFFSET_STD_IO)
+        emu_trace.write(f"INP [{port:02x}] : 0x{self.default_rval:x}", pc_offset=PC_OFFSET_STD_IO)
         return self.default_rval
 
 
@@ -168,14 +122,14 @@ class IOP14(IODevice):
     def __init__(self, board, default_rval=0x9b):
         super().__init__(default_rval=default_rval)
         self.board = board
-        print(f"IO14 device initialized with default rval={self.default_rval:#x}. TODO: see comments.")
+        log_io.info(f"IO14 device initialized with default rval={self.default_rval:#x}. TODO: see comments.")
 
     def write(self, port, val):
-        trace_write(f"IO14_OUT [{port:02x}] = {val:02x}", pc_offset=PC_OFFSET_STD_IO)
+        emu_trace.write(f"IO14_OUT [{port:02x}] = {val:02x}", pc_offset=PC_OFFSET_STD_IO)
         self.board.set_proms_enabled(val & 1)
 
     def read(self, port):
-        trace_write(f"IO14_INP [{port:02x}] : 0x{self.default_rval:x}", pc_offset=PC_OFFSET_STD_IO)
+        emu_trace.write(f"IO14_INP [{port:02x}] : 0x{self.default_rval:x}", pc_offset=PC_OFFSET_STD_IO)
         return self.default_rval
 
 
@@ -211,13 +165,13 @@ class IOCTC(IOIgnore):
     PORTS = (CH0, CH1, CH2, CH3)
 
     def write(self, port, val):
-        trace_write(f"IOCTC OUT [{port:02x}] = {val:02x}", pc_offset=PC_OFFSET_STD_IO)
+        emu_trace.write(f"IOCTC OUT [{port:02x}] = {val:02x}", pc_offset=PC_OFFSET_STD_IO)
         if val & 0x1:
             # control
             if val & 0x80:
-                print("-- NB: wanted interrupt")
+                log_io.warning("-- NB: wanted interrupt")
     def read(self, port):
-        trace_write(f"IOCTC INP [{port:02x}] : 0x{self.default_rval:x}", pc_offset=PC_OFFSET_STD_IO)
+        emu_trace.write(f"IOCTC INP [{port:02x}] : 0x{self.default_rval:x}", pc_offset=PC_OFFSET_STD_IO)
         return self.default_rval
 
 
@@ -230,9 +184,9 @@ class IOPar(IOIgnore):
     PORTS = (AC, AD, BC, BD)
 
     def write(self, port, val):
-        trace_write(f"IOPAR OUT [{port:02x}] = {val:02x}", pc_offset=PC_OFFSET_STD_IO)
+        emu_trace.write(f"IOPAR OUT [{port:02x}] = {val:02x}", pc_offset=PC_OFFSET_STD_IO)
     def read(self, port):
-        trace_write(f"IOPAR INP [{port:02x}] : 0x{self.default_rval:x}", pc_offset=PC_OFFSET_STD_IO)
+        emu_trace.write(f"IOPAR INP [{port:02x}] : 0x{self.default_rval:x}", pc_offset=PC_OFFSET_STD_IO)
         return self.default_rval
 
 
@@ -296,11 +250,12 @@ class IOSerial(IODevice):
         # This is incomplete and is just there to detect if something interesting is set up on the serial channel.
         if val != 0 or self.next_reg[self.BC] > 0:
             # 0 is typically used when polling
-            trace_write(f"IOSER  OUT[{port:2x}] = {val:2x},  ser_BC reg was {self.next_reg[self.BC]:2x}: ", pc_offset=PC_OFFSET_STD_IO)
-            # print(f"IOSER write CB reg {self.next_reg[self.BC]} - {port:2x} {val:2x}")
+            emu_trace.write(f"IOSER  OUT[{port:2x}] = {val:2x},  ser_BC reg was {self.next_reg[self.BC]:2x}: ",
+                            pc_offset=PC_OFFSET_STD_IO)
+            # log_io.info(f"IOSER write CB reg {self.next_reg[self.BC]} - {port:2x} {val:2x}")
             if self.next_reg[self.BC] == 0:
                 if val & 0x7 > 0:
-                    # print(f"IOSER --- next reg is {val&0x7}")
+                    # log_io.info(f"IOSER --- next reg is {val&0x7}")
                     self.next_reg[self.BC] = val & 0x7
             else:
                 self.next_reg[self.BC] = 0
@@ -329,10 +284,10 @@ class IOSerial(IODevice):
         if port == self.BD:
             if self.input_bytes:
                 return self.input_bytes.popleft()
-            print(f"WARNING: read from empty serial port {port}. Returning 0 {pc_disasm_str()}")
+            log_io.warning(f"WARNING: read from empty serial port {port}. Returning 0 {pc_disasm_str()}")
             return 0
 
-        print(f"WARNING ({self}): unknown port {port}. Supporting one of {self.BD=} {self.BC=} {pc_disasm_str()}")
+        log_io.warning(f"WARNING ({self}): unknown port {port}. Supporting one of {self.BD=} {self.BC=} {pc_disasm_str()}")
         return 0
 
 
@@ -464,7 +419,11 @@ class DiskDrive:
         if self.dpos == 0:
             # Make sure there is a freshly read sector here (to enable swapping disks)
             # TODO: could perhaps just move this to "start"
-            print(f"RD_SECTOR dsk={self.dno} sector {self.track:02}.{self.sector:02} .. {pc_disasm_str(PC_OFFSET_STD_IO)}")
+            log_disk.info(f"RD_SECTOR dsk=%d sector %02d.%02d.. %s",
+                          self.dno,
+                          self.track,
+                          self.sector,
+                          pc_disasm_str(PC_OFFSET_STD_IO))
             self.data = self.disk_img.read_sector(self.track, self.sector)
 
         if self.dpos < self.SECTOR_D_SIZE:
@@ -476,7 +435,7 @@ class DiskDrive:
             self.dpos += 1
             if self.dpos == self.SECTOR_D_SIZE:
                 self.set_at_state(False, True)
-                # print(f"DSK_READ_SECT_COMPLETE {self.track:02}.{self.sector:02} : {self.data} {pc_disasm_str(PC_OFFSET_STD_IO)}")
+                # log_disk.debug(f"DSK_READ_SECT_COMPLETE {self.track:02}.{self.sector:02} : {self.data} {pc_disasm_str(PC_OFFSET_STD_IO)}")
             return ret
 
         # TODO: potential for infinite loop, but prom seems to start a new read after crc
@@ -485,7 +444,7 @@ class DiskDrive:
 
     def read(self):
         """Reads one byte."""
-        # print("DSK_read", self)
+        # log_disk.debug("DSK_read", self)
         match self.state:
             case self.ST_HDR:
                 return self._read_header()
@@ -503,7 +462,7 @@ class DiskDrive:
                 f"expected {self.SECTOR_D_SIZE} bytes, got {len(self.wbuf)}"
             )
         self.data = bytes(self.wbuf)
-        # print(f"DSK_WRITE_SECT_COMPLETE {self.track:02}.{self.sector:02} : {self.data}")
+        # log_disk.debug(f"DSK_WRITE_SECT_COMPLETE {self.track:02}.{self.sector:02} : {self.data}")
         self.disk_img.write_sector(self.track, self.sector, self.data, flush=True)
 
     def write_add_byte(self, bval):
@@ -617,7 +576,7 @@ class IODiskController(IODevice):
                     self.sector = 1
 
     def write_cw1(self, val):
-        # print(f"DSK_WRITE_CW1 f{val:#02x}")
+        # log_disk.debug(f"DSK_WRITE_CW1 f{val:#02x}")
         match val:
             # NB: both read_hdr and read__data run the 41 49 sequence!
             case 0x41:
@@ -625,7 +584,7 @@ class IODiskController(IODevice):
             case 0x49:
                 self.rd_state = self.RD_ST_RUN
                 if self.drive is None:
-                    print("WARNING: drive was none in write_cw1")
+                    log_disk.warning("WARNING: drive was none in write_cw1")
                     self.drive = self.drives[self.drive_no]
                 # TODO: self.drive should never be none here.
                 if self.drive.track != self.track or self.drive.sector != self.sector:
@@ -641,23 +600,23 @@ class IODiskController(IODevice):
                 # C9 is WR=1, /LD=1, WG=0,
                 # see dsk_write_sector_data. A write sector starts with
                 # C9 to CW1, then C0 to CW2
-                # print("TODO: Trying disk write (C9 to CW1)")
+                # log_disk.debug("TODO: Trying disk write (C9 to CW1)")
                 self.wr_state = self.WR_ST_1
             case 0xa1:
                 self.wr_state = self.WR_ST_3
-                # print("TODO: wr_state now", self.wr_state)
+                # log_disk.debug("TODO: wr_state now", self.wr_state)
             case 0xa8:
                 self.wr_state = self.WR_ST_4
-                # print("TODO: wr_state now", self.wr_state)
+                # log_disk.debug("TODO: wr_state now", self.wr_state)
             case 0xa9:
                 self.wr_state = self.WR_ST_DATA
-                # print("TODO: wr_state now", self.wr_state)
+                # log_disk.debug("TODO: wr_state now", self.wr_state)
                 # Fetch current sector and prepare it for writing
                 self.set_sector(self.drive_no, self.track, self.sector)
                 self.drive.prepare_write()
             case 0xad:
                 self.wr_state = self.WR_ST_OFF
-                # print("TODO: wr_state now", self.wr_state, 'Write done, so commiting and ignoring the rest')
+                # log_disk.debug("TODO: wr_state now", self.wr_state, 'Write done, so commiting and ignoring the rest')
                 self.drive.commit_write()
 
 
@@ -696,11 +655,11 @@ class IODiskController(IODevice):
                 if self.wr_state == self.WR_ST_DATA:
                     self.drive.write_add_byte(val)
             case _:
-                print(f"DSK_WRITE_unknown: {port=:#x} {val=:#x} {pc_disasm_str(PC_OFFSET_STD_IO)}")
+                log_disk.warning(f"DSK_WRITE_unknown: {port=:#x} {val=:#x} {pc_disasm_str(PC_OFFSET_STD_IO)}")
         if self.verbose:
             st = f"DSK_OUT {pre:10} [{port:02x}] = {val:02x}.  rdstate {_org_rd_state}->"
             st += f"{self.rd_state} wstate {self.wr_state} T={self.track} S={self.sector}  {self.drive_no}"
-            trace_write(st, include_stack=True, pc_offset=PC_OFFSET_STD_IO)
+            emu_trace.write(st, include_stack=True, pc_offset=PC_OFFSET_STD_IO)
 
     # A few simplifications compared to a real drive:
     # - instant track move and time to next pos
@@ -738,8 +697,8 @@ class IODiskController(IODevice):
             case self.I_DATA:
                 val = self._read_data()
         if self.verbose:
-            trace_write(f"DSK_INP {pre:10} [{port:02x}] : {hex(val):6}",
-                        include_stack=True, pc_offset=PC_OFFSET_STD_IO)
+            emu_trace.write(f"DSK_INP {pre:10} [{port:02x}] : {hex(val):6}",
+                            include_stack=True, pc_offset=PC_OFFSET_STD_IO)
         return val
 
 
@@ -769,12 +728,12 @@ sim_paused = False
 def sim_pause():
     global sim_paused
     sim_paused = True
-    print("Sim paused")
+    log.info("Sim paused")
 
 def sim_cont():
     global sim_paused
     sim_paused = False
-    print("Sim continued")
+    log.info("Sim continued")
 
 
 @contextmanager
@@ -810,7 +769,7 @@ def run_sim(board, ch_in, ch_in_p, steps_per_chunk=1000):
         iters += steps_per_chunk
         if iters > N and tstart > 0:
             tstop = time.time()
-            print(f"Ran {iters:_} steps in {tstop-tstart:.3f} seconds ({iters/(tstop-tstart):_} steps/s)")
+            log.info(f"Ran {iters:_} steps in {tstop-tstart:.3f} seconds ({iters/(tstop-tstart):_} steps/s)")
             sys.stdout.flush()
             tstart = 0  # disable
 
@@ -887,7 +846,7 @@ class Board:
         self.proms = []
 
     def set_proms_enabled(self, enabled):
-        print("-- NB: Board setting proms to", "enabled" if enabled else "disabled")
+        log.info("-- NB: Board setting proms to %s", "enabled" if enabled else "disabled")
         for prom in self.proms:
             prom.set_enabled(enabled)
 
@@ -907,12 +866,6 @@ class Board1001(Board):
         # Dim 1001 uses only one prom chip.
         self.proms.append(PromRegion(Path(config['run-dir'], config['prom0']), 0x0))
 
-        # TODO: this probably won't work yet.
-        # The disk controller appears to be mapped to the same ports
-        # as for the one used in the 1003 proms, and the code
-        # appears to be fairly similar. There are probably some minor
-        # differences that the disk emulator doesn't catch yet.
-        print("WARNING: disk support for dim-1001 boards probably don't work yet")
         self.dsk = IODiskController(d_imgs)
         self.dsk.register_ports(self.io_ports)
 
@@ -972,7 +925,7 @@ def make_config(argv=None):
     config['console_out'] = args.to
     config['script']      = args.script
     config['embedded_console'] = args.ec
-    print(config)
+    log.debug(config)
     return config
 
 
@@ -984,13 +937,14 @@ BOARD_TYPES = {
 
 def main():
     config = make_config()
+    configure_logging(trace_enabled=True)
 
     # TODO: Hack since there is currently no clean way of failing if a
     # non-existing disk is requested in the controller. The emulator currently
     # just crashes.
     # This adds some default images, with write-through if any image is modified.
     # Non-existing images will be created on the disk on the first write.
-    print("Using disk image(s) from", config['disk-images'])
+    log.info(f"Using disk image(s) from {config['disk-images']}")
     d_imgs = [diskimage.DiskImage.from_file(dname) for dname in config['disk-images']]
 
     if len(d_imgs) > 8:
@@ -1027,17 +981,15 @@ def main():
             # board.sport.schedule_bytes(4, "S2000F5D5C53E0432D70FCD0E113E0406020E0216001E00210030CD8500F53AD70FCD4911F101CD0000\r")
             # board.sport.schedule_bytes(5, "G2000\r")
         elif config['script']:
-            print("Adding script", config['script'])
+            log.info("Adding script %s", config['script'])
             board.sport.schedule_bytes(0.3, config['script'])
         # sport.schedule_bytes(0.1, "D" + "1000" + "1010")
 
-        print("WWW 1")
         # Slightly hacky, but this lets us read from the serial port and put it in the
         # queue of the emulator's serial port.
         # NB: need to set it to binary + unbuffered, otherwise terminal input will be buffered and not work properly
         console_in_p = select.poll()
         console_in_p.register(console_in.fileno(), select.POLLIN)
-        print("WWW 2")
 
         # If embedded console:
         if (ec_fn := config['embedded_console']):
@@ -1047,7 +999,6 @@ def main():
         # track cpm loading
         # z80emu.mem_set_track_mask(0xee00, 0xffff, z80emu.TRACK_EXEC)
         try:
-            print("NOW RUNNING")
             run_sim(board, console_in, console_in_p)
         except KeyboardInterrupt:
             print("\nEmulator stopped by keyboard interrupt.", file=sys.stderr)

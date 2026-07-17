@@ -30,5 +30,9 @@ def read_config(dname):
     return conf
 
 if __name__ == "__main__":
-    conf = read_config("run-tst")
+    import sys
+    cdir = "run-tst"
+    if len(sys.argv) > 2:
+        cdir = sys.argv[1]
+    conf = read_config(cdir)
     print(conf)

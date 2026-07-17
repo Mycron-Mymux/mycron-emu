@@ -14,11 +14,15 @@ Which is a total of 77 * 26 * 128 = 256256 bytes
 
 import os
 import argparse
+import logging
+
 
 TRACKS=77
 SECTORS=26
 SECTOR_SIZE=128
 IMG_LEN = TRACKS * SECTORS * SECTOR_SIZE
+
+log_dimg = logging.getLogger("mycron.trace.diskimg")
 
 # prog at 0x3000
 prog_simple = bytes([
@@ -157,7 +161,7 @@ class DiskImage:
                     f.seek(offset)
                     f.write(data)
             except FileNotFoundError:
-                print("Flush write without any existing image. Flushing entire image from memory.")
+                log_dimg.warning("Flush write without any existing image. Flushing entire image from memory.")
                 with open(self.fname, mode="wb") as f:
                     f.write(self.barr)
 

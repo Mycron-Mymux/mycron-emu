@@ -6,16 +6,17 @@
 # old library and the new cffi based interface.
 #
 
+import logging
 from _z80emu_cffi import ffi as _ffi
 from _z80emu_cffi import lib as _lib
 # Import these to export the constants as part of the z80emu API
 from _z80emu_cffi.lib import TRACK_NONE, TRACK_RD, TRACK_WR, TRACK_EXEC, Z80_MEM_SIZE
 
-
 _in_callback = None
 _out_callback = None
 _pending_callback_exception = None
 
+log_io = logging.getLogger("mycron.trace.io")
 
 def _callback_error(exc_type, exc_value, exc_tb):
     global _pending_callback_exception
@@ -47,7 +48,7 @@ def _c_io_in(port):
         return 0
 
     if _in_callback is None:
-        print(f"Z80_In {port:02x}")
+        log_io.info(f"Z80_In {port:02x}")
         return 0
 
     return int(_in_callback(port)) & 0xff
@@ -64,7 +65,7 @@ def _c_io_out(port, value):
         return
 
     if _out_callback is None:
-        print(f"Z80_Out {port:02x} <- {value:02x}")
+        log_io.info(f"Z80_Out {port:02x} <- {value:02x}")
         return
 
     _out_callback(port, value)
@@ -124,7 +125,7 @@ def _validate_memory_range(start, end):
 
     return start, end
 
-    
+
 def mem_set_prot(start, end, val):
     """
     Set memory protection over [start, end).
