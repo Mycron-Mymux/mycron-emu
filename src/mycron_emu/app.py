@@ -32,6 +32,8 @@ from mycron_emu.embedded_console import start_pty_console
 from mycron_emu.disks import image as diskimage
 from mycron_emu import tracing
 from mycron_emu.boards import BOARD_TYPES
+from mycron_emu.channels import ChannelRegistry
+from mycron_emu.scheduler import ScheduledSender
 
 log = logging.getLogger("mycron.status")
 io_log = logging.getLogger("mycron.io")
@@ -47,7 +49,7 @@ def check_console(board, ch_in, poller):
         return
 
     data = ch_in.read(1)
-    if not data:
+    if not data:     # Even a null byte registers as true
         poller.unregister(ch_in.fileno())
         return
 
@@ -88,7 +90,7 @@ def sim_paused_context():
             sim_cont()
 
 
-def run_sim(board, ch_in, ch_in_p, steps_per_chunk=1000):
+def run_sim(board, ch_in, ch_in_p, scheduled_input, steps_per_chunk=1000):
     """Starts the simulator
     steps_per_chunk is how many steps the z80 C library should run before returning to Python
     for another iteration. Too many steps means the console and some other functions
@@ -101,6 +103,8 @@ def run_sim(board, ch_in, ch_in_p, steps_per_chunk=1000):
         if sim_paused:
             time.sleep(0.1)
             continue
+
+        scheduled_input.poll()
         check_console(board, ch_in, ch_in_p)
         z80.run_steps(steps_per_chunk)
 
@@ -144,7 +148,7 @@ def make_config(args):
     return config
 
 
-def schedule_startup_script(board, config):
+def schedule_startup_script(scheduler, config):
     if config["script_arg"]:
         script_path = Path(config["script_arg"])
     elif script_name := config.get("script"):
@@ -154,13 +158,20 @@ def schedule_startup_script(board, config):
 
     log.info("Loading console script %s", script_path)
 
-    for delay, data in read_console_script(script_path):
-        board.sport.schedule_bytes(delay, data)
+    start = time.monotonic()
+    for offset, data in read_console_script(script_path):
+        scheduler.schedule_at(start + offset, data)
 
 
 def run_emulator(args):
     z80.reset()
     config = make_config(args)
+
+    registry = ChannelRegistry()
+    console_input = registry.create("console.input")
+    console_output = registry.create("console.output")
+    aux_output = registry.create("aux.output")
+    printer_output = registry.create("printer.output")
 
     # TODO: Hack since there is currently no clean way of failing if a
     # non-existing disk is requested in the controller. The emulator currently
@@ -186,13 +197,15 @@ def run_emulator(args):
 
         board = board_type(config, d_imgs, console_out)
 
+        scheduled_input = ScheduledSender(board.sport.queue_bytes)
+
         set_in_callback(board.io_in)
         set_out_callback(board.io_out)
 
         if config['send']:
-            board.sport.schedule_bytes(0.3, config['send'])
+            scheduled_input.schedule_after(0.3, config['send'])
 
-        schedule_startup_script(board, config)
+        schedule_startup_script(scheduled_input, config)
 
         # Slightly hacky, but this lets us read from the serial port and put it in the
         # queue of the emulator's serial port.
@@ -207,6 +220,6 @@ def run_emulator(args):
 
         # track cpm loading
         # z80.mem_set_track_mask(0xee00, 0xffff, z80.TRACK_EXEC)
-        run_sim(board, console_in, console_in_p)
+        run_sim(board, console_in, console_in_p, scheduled_input)
 
     return 0

@@ -38,7 +38,6 @@ from mycron_emu import tracing
 io_log = logging.getLogger("mycron.io")
 
 
-
 class SerialPort(IODevice):
     """Generic serial port providing the necessary functionality for the
     DIM-1001 and DIM-1003 ports. It only emulates the actual ports and
@@ -54,7 +53,6 @@ class SerialPort(IODevice):
         self.name =name
         self.output = output
         self.input_bytes = deque()
-        self.scheduled_input = []
         self.selected_wr = 0
         self.write_registers = [0] * 8
 
@@ -64,23 +62,7 @@ class SerialPort(IODevice):
             data = data.encode("ascii")
         self.input_bytes.extend(data)
 
-    def schedule_bytes(self, delay, data):
-        """Queue bytes to be delivered after 'delay' seconds"""
-        if isinstance(data, str):
-            data = data.encode("ascii")
-        heapq.heappush(
-            self.scheduled_input,
-            (float(delay) + time.monotonic(), bytes(data)))
-
-    def _release_scheduled_input(self):
-        tnow = time.monotonic()
-        while (self.scheduled_input
-               and self.scheduled_input[0][0] <= tnow):
-            _, data = heapq.heappop(self.scheduled_input)
-            self.input_bytes.extend(data)
-
     def rx_ready(self):
-        self._release_scheduled_input()
         return bool(self.input_bytes)
 
     def tx_ready(self):
@@ -90,7 +72,6 @@ class SerialPort(IODevice):
         # For polling mode:
         # bit 2 : just indicate that it's always ready to transmit more (4)
         # bit 0 : whether there is data queued (1 or 0).
-        self._release_scheduled_input()
         return 4 | bool(self.input_bytes)
 
     def _read_data(self):
@@ -100,7 +81,6 @@ class SerialPort(IODevice):
         return 0
 
     def read(self, port):
-        self._release_scheduled_input()
         if port == self.control_port:
             return self._read_control()
         if port == self.data_port:
@@ -160,8 +140,6 @@ class SerialDIM1001:
     def queue_bytes(self, data):
         self.console.queue_bytes(data)
 
-    def schedule_bytes(self, delay, data):
-        self.console.schedule_bytes(delay, data)
 
 class SerialDIM1003:
     """Serial ports on the DIM-1003, using a Z80 SIO.
@@ -190,6 +168,3 @@ class SerialDIM1003:
 
     def queue_bytes(self, data):
         self.console.queue_bytes(data)
-
-    def schedule_bytes(self, delay, data):
-        self.console.schedule_bytes(delay, data)
