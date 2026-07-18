@@ -1,14 +1,13 @@
 #!/usr/bin/env python
 
 # tests/test_disk.py
-
-import diskimage
-from diskcontroller import DiskDrive, IODiskController
+from mycron_emu.devices.disk import DiskDrive, IODiskController
+from mycron_emu.disks.image import DiskImage, TRACKS, SECTORS
 
 
 def make_images(count=8):
     return [
-        diskimage.DiskImage.empty_image("drive-{number}", read_from_file=False)
+        DiskImage.empty_image(f"drive-{number}", read_from_file=False)
         for number in range(count)
     ]
 
@@ -66,14 +65,15 @@ def test_drive_track_is_clamped():
     drive.step_track(-1)
     assert drive.track == 0
 
-    for _ in range(diskimage.TRACKS + 10):
+    for _ in range(TRACKS + 10):
         drive.step_track(+1)
 
-    assert drive.track == diskimage.TRACKS - 1
-    
-def test_sector_wraps_to_one(disk_controller):
-    drive = disk_controller.drive
-    drive.sector = diskimage.SECTORS
+    assert drive.track == TRACKS - 1
+
+def test_sector_wraps_to_one():
+    controller = make_controller()
+    drive = controller.drive
+    drive.sector = SECTORS
 
     drive.advance_sector()
 

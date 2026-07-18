@@ -1,21 +1,12 @@
 #!/usr/bin/env python
 
-from setuptools import setup
+from setuptools import find_packages, setup
 
 setup(
-    name="mycronemu",
+    name="mycron_emu",
     version="0.0.1",
-    py_modules=[
-        "diskcontroller",
-        "diskimage",
-        "embedded_console",
-        "emu_logging",
-        "emu_trace",
-        "emuconfig",
-        "iodevice",
-        "pyemu",
-        "z80emu",
-    ],
+    package_dir={"" : "src"},
+    packages=find_packages("src"),
     setup_requires=[
         "cffi>=1.15",
     ],
@@ -25,8 +16,11 @@ setup(
     cffi_modules=[
         "z80emu_build.py:ffibuilder",
     ],
+    entry_points={
+        "console_scripts": [
+            "mycron=mycron_emu.cli.mycron:main",
+            "makedisk=mycron_emu.cli.makedisk:main",
+        ],
+    },    
 )
-
-# Extra hack. Need these flags to get the emultator to work correctly
-# extra_compile_args += ["-fomit-frame-pointer", "-DLSB_FIRST"]
 

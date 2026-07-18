@@ -1,27 +1,24 @@
-#!/usr/bin/env python3
-
-"""
-This deals with raw Mycron disk images that have the following layouts:
-- single sided disks
-- 77 tracks   (numbered 0 to 76)
-- 26 sectors  (numbered 1 to 26)
-- 128 bytes per sector
-Which is a total of 77 * 26 * 128 = 256256 bytes
+#!/usr/bin/env python
 
 
-- bytearray(bytes) - > bytearrays are not read only
-"""
+from mycron_emu.disks.image import DiskImage, SECTOR_SIZE, TRACKS, SECTORS, ts_to_secno, secno_to_ts
 
-import argparse
-import logging
+def hexdump_data(data):
+    print("     0  1  2  3  4  5  6  7   8  9  a  b  c  d  e  f    012345678 9abcdef")
+    while len(data) > 0:
+        cur = data[:16]
+        buf = "   "
+        buf2 = "  |"
+        for i, c in enumerate(cur):
+            buf += f" {c:02x}"
+            c = chr(c)
+            buf2 += c if c.isprintable() else '.'
+            if i == 7:
+                buf += ' '
+                buf2 += ' '
+        print(buf, buf2)
+        data = data[16:]
 
-
-TRACKS=77
-SECTORS=26
-SECTOR_SIZE=128
-IMG_LEN = TRACKS * SECTORS * SECTOR_SIZE
-
-log_dimg = logging.getLogger("mycron.trace.diskimg")
 
 # prog at 0x3000
 prog_simple = bytes([
@@ -60,115 +57,6 @@ prog_simple_text += bytes(128 - len(prog_simple_text))
 assert len(prog_simple) == 128
 assert len(prog_simple_text) == 128
 
-
-def hexdump_data(data):
-    print("     0  1  2  3  4  5  6  7   8  9  a  b  c  d  e  f    012345678 9abcdef")
-    while len(data) > 0:
-        cur = data[:16]
-        buf = "   "
-        buf2 = "  |"
-        for i, c in enumerate(cur):
-            buf += f" {c:02x}"
-            c = chr(c)
-            buf2 += c if c.isprintable() else '.'
-            if i == 7:
-                buf += ' '
-                buf2 += ' '
-        print(buf, buf2)
-        data = data[16:]
-
-
-def ts_to_secno(track, sector):
-    return track * SECTORS + sector - 1
-
-
-def secno_to_ts(secno):
-    track = secno // SECTORS
-    sector = (secno % SECTORS) + 1
-    return track, sector
-
-
-class DiskImage:
-    def __init__(self, fname, data, read_from_file=True):
-        self.fname = fname
-        self.barr = bytearray(data)
-        self._read_from_file = read_from_file
-
-    @classmethod
-    def empty_image(cls, name="NA", read_from_file=False):
-        return cls(name, bytes(IMG_LEN), read_from_file=read_from_file)
-
-    @classmethod
-    def from_file(cls, fname):
-        data = open(fname, 'rb').read()
-        if len(data) != IMG_LEN:
-            raise ValueError(f"{fname}: expected {IMG_LEN} bytes, got {len(data)}")
-        return cls(fname, data)
-
-    def save(self, fname=None):
-        if fname is None:
-            fname = self.fname
-        with open(fname, 'wb') as f:
-            f.write(self.barr)
-
-    def _get_offset(self, track, sector):
-        if not 0 <= track < TRACKS:
-            raise ValueError(f"invalid track: {track}")
-        if not 1 <= sector <= SECTORS:
-            raise ValueError(f"invalid sector: {sector}")
-        return ((track * SECTORS) + (sector - 1)) * SECTOR_SIZE
-
-    def read_sector(self, track, sector):
-        """NB: sectors are numbered 1..26.
-        Uses "read-through" semantics if the disk image exists
-        (ignores buffer and reads directly from the file) to support
-        floopy change by simply overwriting or replacing the
-        file.
-        """
-        offset = self._get_offset(track, sector)
-        if self._read_from_file:
-            try:
-                with open(self.fname, 'rb') as f:
-                    f.seek(offset)
-                    data = f.read(SECTOR_SIZE)
-            except FileNotFoundError:
-                pass
-            else:
-                # pad zero
-                data = data.ljust(SECTOR_SIZE, b"\0")
-                # update buffer copy of the image
-                self.barr[offset:offset + SECTOR_SIZE] = data
-        return bytes(self.barr[offset:offset + SECTOR_SIZE])
-
-    def write_sector(self, track, sector, data, flush=False):
-        """NB: sectors are numbered 1..26
-        Uses "write-through" semantics.
-        If the file does not exist, creates the file and dumps the entire
-        disk image to the file.
-        """
-        if not isinstance(data, (bytes, bytearray)):
-            raise TypeError("sector data must be bytes or bytearray")
-        if len(data) != SECTOR_SIZE:
-            raise ValueError(f"sector data must contain {SECTOR_SIZE} bytes, got {len(data)}")
-
-        offset = self._get_offset(track, sector)
-        self.barr[offset:offset + SECTOR_SIZE] = data
-        if flush:
-            try:
-                # print(f"DSK_WRITE_FLUSH {track:02}.{sector:02} {data}")
-                with open(self.fname, 'rb+') as f:
-                    f.seek(offset)
-                    f.write(data)
-            except FileNotFoundError:
-                log_dimg.warning("Flush write without any existing image. Flushing entire image from memory.")
-                with open(self.fname, mode="wb") as f:
-                    f.write(self.barr)
-
-
-    def all_sectors(self):
-        for trk in range(TRACKS):
-            for sec in range(1, SECTORS + 1):
-                yield (trk, sec, self.read_sector(trk, sec))
 
 
 # ------------------------------------------------------
@@ -302,7 +190,6 @@ def data_make_test_img(name="NA"):
     img.write_sector(1, 1, bytes(b'EMPTY' + b'\x00' + b' ' * 122))
     return img
 
-
 def test():
     def test_read(img, sectors):
         for tno, sno in sectors:
@@ -325,28 +212,3 @@ def test():
         test_read(img3, [(0, 1), (0, 7), (0, 8), (0, 9), (1, 1), (1, 2)])
         img3.save()
 
-def parse_args(argv=None):
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-mp", nargs=1, default=[],
-                        help="Create a Mycron prog disk image and store it to he given file name")
-    parser.add_argument("-md", nargs=1, default=[],
-                        help="Create a Mycron data disk image and store it to he given file name")
-    parser.add_argument("-me", nargs=1, default=[],
-                        help="Create an emptydisk image and store it to he given file name")
-    parser.add_argument("-t", action="store_true",
-                        help="Run some simple tests")
-    return parser.parse_args(argv)
-
-if __name__ == "__main__":
-    args = parse_args()
-    for fn in args.mp:
-        print("Making prog test image", fn)
-        prog_make_test_img(fn).save()
-    for fn in args.md:
-        print("Making data test image", fn)
-        data_make_test_img(fn).save()
-    for fn in args.me:
-        print("Making empty image", fn)
-        DiskImage.empty_image(fn).save()
-    if args.t:
-        test()

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-from dbm import error
 import json
 from pathlib import Path
 

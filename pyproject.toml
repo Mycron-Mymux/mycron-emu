@@ -1,0 +1,3 @@
+# disable annoying blue lines for perfectly normal behaviour (especially adding argument to argparsers)
+[tool.basedpyright]
+reportUnusedCallResult = false

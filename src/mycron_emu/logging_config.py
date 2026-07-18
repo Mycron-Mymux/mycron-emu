@@ -53,7 +53,7 @@ def configure_logging(
 
     root = logging.getLogger(ROOT_LOGGER)
     root.setLevel(logging.DEBUG)
-    root.setLevel(logging.INFO)
+    # root.setLevel(logging.INFO)
 
     # Avoid duplicate handlers if configuration is called again.
     root.handlers.clear()
@@ -74,7 +74,8 @@ def configure_logging(
     root.addHandler(status_handler)
     root.addHandler(trace_handler)
 
-    logging.Formatter("%(levelname)s: %(message)s")
+    # To prefix with log level
+    status_handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
 
     # log.setLevel(logging.INFO)
     # logging.basicConfig(level=logging.INFO)

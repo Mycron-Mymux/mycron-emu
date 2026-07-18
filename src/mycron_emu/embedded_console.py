@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """embedded_console.py
-Created using ChatGPT 5.5 thinking. 
+Created using ChatGPT 5.5 thinking.
 
 WARNING: Note that this console is not thread safe.
 I'm not fixing this now as it's only used for debug/testing at the moment,

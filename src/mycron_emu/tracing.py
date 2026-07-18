@@ -2,8 +2,8 @@
 
 import logging
 
-import z80emu
-from z80emu import mem_dis, get_regs
+from mycron_emu import z80
+from mycron_emu.z80 import mem_dis, get_regs
 
 
 # most instructions of the type  IN A, OUT A should be 2 bytes.
@@ -17,7 +17,7 @@ def regs_str(regs=None):
     """Returns a dict with regs and a string rep of regs with hex values"""
     names = ("PC", "SP", "AF", "BC", "DE", "HL")
     if regs is None:
-        regs = z80emu.get_regs()
+        regs = z80.get_regs()
     values = ",".join(
         f"{name}={regs[name]:04x}"
         for name in names
@@ -30,7 +30,7 @@ def regs_stack_str():
     s = regs_str(regs)
     sp = regs['SP']
     s += " Stack: ["
-    s += " ".join([f"{z80emu.mem_rd(sp + i):02x}" for i in range(10)])
+    s += " ".join([f"{z80.mem_rd(sp + i):02x}" for i in range(10)])
     s += "]"
     return s
 
@@ -47,7 +47,7 @@ def pc_disasm_str(pc_offset=0):
     most cases.
     """
     try:
-        regs = z80emu.get_regs()
+        regs = z80.get_regs()
         pc = (regs["PC"] + pc_offset) & 0xffff
         offs = "" if pc_offset == 0 else f" PC offset {pc_offset}"
         _, asm = mem_dis(pc)

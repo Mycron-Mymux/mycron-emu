@@ -1,7 +1,7 @@
 Mycron emulator
 ================
 
-This is an emulator for the Mycro-1 computer with the Z80 CPU and
+This is an emulator for the Mycro-1/Mycro-3 computers with a Z80 CPU and
 PROMs from the DIM-1001 (i8080) and DIM-1003 (Z-80) CPU card.
 
 The emulator is written as a tool for exploring and understanding the
@@ -36,6 +36,22 @@ To compile the project on a Linux box (tested on Ubuntu 26.04), just run:
 make
 ```
 
+## Building the emulator
+
+If you want to modify or run it locally without making a "final" pip
+install, try to run (from the main directory):
+
+    `python -m pip install -e .`
+
+Note the final dot in the command. It is necessary to tell pip to install
+it as a module linked to the current directory.
+
+You should now have two commands available:
+
+- mycron : the main program for the emulator.
+- makedisk : a utility program to make disk images.
+  It supports empty disks and Mycron DATA and PROG disks.
+
 ## Using the emulator
 
 Before starting the emulator, you need the following:
@@ -65,7 +81,22 @@ cool-retro-term (incorrect drawing of window backgrounds, for
 instance), but recompiling the binary myself seemed to work better.
 
 
-### Using the Python debug console
+### A run directory with prom dumps and diskette images
+
+A starting directory is provided in this project.
+The idea is to move more of the config options to the config file
+included in the directory. This is on the TODO list.
+
+The main things that needs to be included here are:
+
+- the config file
+- PROM dumps
+- diskette images (if you intend to use diskette simulation)
+
+
+# Other things to know about
+
+## Using the Python debug console
 
 An optional Python console has been added to the emulator.
 
@@ -87,22 +118,7 @@ The rlwrap version is probably the one that comes closest to a normal
 Python console, although it is not a fully supported console with
 readline and tab completion.
 
-### A run directory with prom dumps and diskette images
-
-A starting directory is provided in this project.
-The idea is to move more of the config options to the config file
-included in the directory. This is on the TODO list.
-
-The main things that needs to be included here are:
-
-- the config file
-- PROM dumps
-- diskette images (if you intend to use diskette simulation)
-
-
-## Other things to know about
-
-### Swapping diskette images while running
+## Swapping diskette images while running
 
 The emulator opens and closes the image files for every read and write
 operation. The simplest way of simulating swapping a diskette is to

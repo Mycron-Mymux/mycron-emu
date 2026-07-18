@@ -4,10 +4,12 @@
 
 import logging
 
-import diskimage
-import emu_trace
-from emu_trace import regs_stack_str, regs_str, pc_disasm_str, PC_OFFSET_STD_IO
-from iodevice import IODevice
+from mycron_emu import tracing
+from mycron_emu.devices.base import IODevice
+from mycron_emu.disks import image as diskimage
+
+from mycron_emu import tracing
+from mycron_emu.tracing import regs_stack_str, regs_str, pc_disasm_str, PC_OFFSET_STD_IO
 
 
 log = logging.getLogger("mycron.status")
@@ -398,7 +400,7 @@ class IODiskController(IODevice):
             drive = self.drive
             st = f"DSK_OUT {pre:10} [{port:02x}] = {val:02x}.  rdstate {_org_rd_state}->"
             st += f"{self.rd_state} wstate {self.wr_state} T={drive.track} S={drive.sector}  {self.drive_no}"
-            emu_trace.write(st, include_stack=True, pc_offset=PC_OFFSET_STD_IO)
+            tracing.write(st, include_stack=True, pc_offset=PC_OFFSET_STD_IO)
 
     # A few simplifications compared to a real drive:
     # - instant track move and time to next pos
@@ -437,7 +439,7 @@ class IODiskController(IODevice):
             case self.I_DATA:
                 val = self._read_data()
         if self.verbose:
-            emu_trace.write(f"DSK_INP {pre:10} [{port:02x}] : {hex(val):6}",
+            tracing.write(f"DSK_INP {pre:10} [{port:02x}] : {hex(val):6}",
                             include_stack=True, pc_offset=PC_OFFSET_STD_IO)
         return val
 

@@ -6,4 +6,5 @@ mycronemu.egg-info
 run-tst*/*.img
 run-tst-*/
 run-tst/disk-imgs
-z80dist/z80em.zip
+src/mycron_emu.egg-info/
+zzextra/
