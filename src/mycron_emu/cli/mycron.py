@@ -1,5 +1,6 @@
 import argparse
 
+import sys
 from mycron_emu.app import run_emulator
 from mycron_emu.logging_config import configure_logging
 

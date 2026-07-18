@@ -26,13 +26,14 @@ install_local:
 
 # while experimenting with llm tools, not intended for the distribution
 snapshot:
-	python zzextra/make_snapshot.py
+	python zzextra/make_snapshot.py zzextra/code-review.md
 	@head -40 zzextra/tmp/project-snapshot.txt
 	wc zzextra/tmp/project-snapshot.txt
 
 white:
-	python zzextra/check_whitespace.py *.py *.md Makefile *.toml *.ini .gitignore \
-	    $(shell find src -iname \*.py) $(shell find csrc -iname \*.h -o -iname \*.c)
+	@python zzextra/check_whitespace.py *.py *.md Makefile *.toml *.ini .gitignore \
+	    $(shell find src -iname \*.py) $(shell find csrc -iname \*.h -o -iname \*.c) \
+	    && echo -e "Whitespace check: \xE2\x9C\x94" || (echo -e "Whitespace check \xE2\x9C\x98 not ok" ; exit 1)
 
 wc:
 	@wc *.py $(shell find src -iname \*.py) $(shell find csrc -iname \*.h -o -iname \*.c)

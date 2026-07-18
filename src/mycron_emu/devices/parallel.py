@@ -17,17 +17,8 @@ function. It should be safe to just return 0xff and force everything to
 use the SIO for simplicity. We can attach stream outputs to that serial port.
 """
 
-import time
-import heapq
-from collections import deque
-import logging
-
 from mycron_emu.devices.base import IODevice
 from mycron_emu import tracing
-from mycron_emu import tracing
-from mycron_emu.tracing import PC_OFFSET_STD_IO
-
-io_log = logging.getLogger("mycron.io")
 
 
 class Z80PioPrinter(IODevice):
@@ -48,7 +39,7 @@ class Z80PioPrinter(IODevice):
         self.b_ctrl = 0
 
     def read(self, port):
-        tracing.write(f"IOPAR INP [{port:02x}]", pc_offset=PC_OFFSET_STD_IO)
+        tracing.write(f"IOPAR INP [{port:02x}]", pc_offset=tracing.PC_OFFSET_STD_IO)
         if port == self.B_DATA:
             return 0xff          # Select SIO-A in redirect_print.
         if port == self.A_DATA:
@@ -56,7 +47,7 @@ class Z80PioPrinter(IODevice):
         return 0xff              # Control-port reads are not used by this PROM.
 
     def write(self, port, value):
-        tracing.write(f"IOPAR OUT [{port:02x}] = {value:02x}", pc_offset=PC_OFFSET_STD_IO)
+        tracing.write(f"IOPAR OUT [{port:02x}] = {value:02x}", pc_offset=tracing.PC_OFFSET_STD_IO)
         value &= 0xff
         if port == self.A_DATA:
             self.a_data = value

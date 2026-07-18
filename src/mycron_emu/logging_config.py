@@ -61,7 +61,9 @@ def configure_logging(
 
     status_handler = logging.StreamHandler(status_stream)
     status_handler.setLevel(logging.INFO)
-    status_handler.setFormatter(logging.Formatter("%(message)s"))
+    # status_handler.setFormatter(logging.Formatter("%(message)s"))
+    # To prefix with log level
+    status_handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
     status_handler.addFilter(_ExcludePrefixFilter(TRACE_LOGGER))
 
     trace_handler = logging.StreamHandler(trace_stream)
@@ -74,8 +76,6 @@ def configure_logging(
     root.addHandler(status_handler)
     root.addHandler(trace_handler)
 
-    # To prefix with log level
-    status_handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
 
     # log.setLevel(logging.INFO)
     # logging.basicConfig(level=logging.INFO)

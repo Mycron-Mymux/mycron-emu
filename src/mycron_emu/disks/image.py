@@ -12,7 +12,6 @@ Which is a total of 77 * 26 * 128 = 256256 bytes
 - bytearray(bytes) - > bytearrays are not read only
 """
 
-import argparse
 import logging
 
 

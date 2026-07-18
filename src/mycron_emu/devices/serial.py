@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-"""The thwo main board types I have available use two different UARTS.
+"""The two main board types I have available use two different UARTS.
 
 The DIM-1001 (i8080 based) card uses a 40-pin TMS6011NC (extra marking: AP
 7714 on card 3191). It is wired to io port 0 (data) and 1 (control). Baud
@@ -19,7 +19,7 @@ With the exception of WR0, each register write requires two bytes:
 z80 peripherals page 293 (of 330)
 
 For the purpose of this emulator, the same logic can be used to emulate
-both UART types as they use the same polling loging to inspect state (RX/TX
+both UART types as they use the same polling logic to inspect state (RX/TX
 ready) and read/transmit data.
 
 Future updates/TODO:
@@ -86,13 +86,14 @@ class SerialPort(IODevice):
     def tx_ready(self):
         return True
 
-    def read_control(self):
+    def _read_control(self):
         # For polling mode:
         # bit 2 : just indicate that it's always ready to transmit more (4)
         # bit 0 : whether there is data queued (1 or 0).
+        self._release_scheduled_input()
         return 4 | bool(self.input_bytes)
 
-    def read_data(self):
+    def _read_data(self):
         if self.input_bytes:
             return self.input_bytes.popleft()
         io_log.warning(f"read from empty serial port {self.data_port}. Returning 0 {tracing.pc_disasm_str()}")
@@ -101,12 +102,13 @@ class SerialPort(IODevice):
     def read(self, port):
         self._release_scheduled_input()
         if port == self.control_port:
-            return 4 | bool(self.input_bytes)
+            return self._read_control()
         if port == self.data_port:
-            return self.read_data()
+            return self._read_data()
+        io_log.warning("%s: read from unknown port %#04x; returning 0", self.name, port)
+        return 0
 
-
-    def _write_serial_ctrl(self, port, value):
+    def _write_control(self, value):
         """Emulate write to console serial port's ctrl register"""
         # A bit clumsy as a first take on the register write sequences
         # This is incomplete and is just there to detect if something interesting
@@ -123,15 +125,18 @@ class SerialPort(IODevice):
             # polling status; retaining it is sufficient initially.
             self.write_registers[0] = value
 
+    def _write_data(self, val):
+        if self.output is not None:
+            self.output.write(bytes([val]))
+            self.output.flush()
+
     def write(self, port, val):
         """Emulate a write to a serial port"""
         match port:
             case self.data_port:
-                if self.output is not None:
-                    self.output.write(bytes([val]))
-                    self.output.flush()
+                self._write_data(val)
             case self.control_port:
-                self._write_serial_ctrl(port, val)
+                self._write_control(val)
 
 
 class SerialDIM1001:
@@ -149,7 +154,7 @@ class SerialDIM1001:
             output = output,
             name="TMS60011 console for DIM1001")
 
-    def register_ports(self, port_registry, ports=None):
+    def register_ports(self, port_registry):
         self.console.register_ports(port_registry)
 
     def queue_bytes(self, data):
@@ -179,7 +184,7 @@ class SerialDIM1003:
             output = aux_output,
             name="Z80 SIO aux")
 
-    def register_ports(self, port_registry, ports=None):
+    def register_ports(self, port_registry):
         self.console.register_ports(port_registry)
         self.aux.register_ports(port_registry)
 
