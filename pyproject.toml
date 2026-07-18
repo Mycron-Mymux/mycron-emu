@@ -1,3 +1,12 @@
+[build-system]
+requires = [
+    "setuptools>=68",
+    "wheel",
+    "cffi>=1.15",
+]
+build-backend = "setuptools.build_meta"
+
+
 # disable annoying blue lines for perfectly normal behaviour (especially adding argument to argparsers)
 [tool.basedpyright]
 reportUnusedCallResult = false

@@ -207,10 +207,6 @@ def run_emulator(args):
 
         # track cpm loading
         # z80.mem_set_track_mask(0xee00, 0xffff, z80.TRACK_EXEC)
-        try:
-            run_sim(board, console_in, console_in_p)
-        except KeyboardInterrupt:
-            print("\nEmulator stopped by keyboard interrupt.", file=sys.stderr)
-            return 130  # interrupted by SIGINT (128 + SIGINT = 2)
+        run_sim(board, console_in, console_in_p)
 
     return 0

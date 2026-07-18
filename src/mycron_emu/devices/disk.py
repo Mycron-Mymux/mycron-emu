@@ -4,25 +4,20 @@
 
 import logging
 
-from mycron_emu import tracing
 from mycron_emu.devices.base import IODevice
 from mycron_emu.disks import image as diskimage
-
 from mycron_emu import tracing
-from mycron_emu.tracing import regs_stack_str, regs_str, pc_disasm_str, PC_OFFSET_STD_IO
+from mycron_emu.tracing import pc_disasm_str, PC_OFFSET_STD_IO
 
 
 log = logging.getLogger("mycron.status")
-io_log = logging.getLogger("mycron.io")
 disk_log = logging.getLogger("mycron.disk")
-
-io_trace = logging.getLogger("mycron.trace.io")
 disk_trace = logging.getLogger("mycron.trace.disk")
 
 
 class DiskDrive:
     # Based on dim-1030 info
-    SECTOR_D_SIZE = 128
+    SECTOR_D_SIZE = diskimage.SECTOR_SIZE
     MARK_HDR = 0xfe
     MARK_DATA = 0xfb
 

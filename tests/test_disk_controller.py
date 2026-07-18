@@ -78,3 +78,22 @@ def test_sector_wraps_to_one():
     drive.advance_sector()
 
     assert drive.sector == 1
+
+def test_read_phase_advances_to_next_sector_after_data_phase():
+    controller = make_controller()
+    drive = controller.drive
+
+    assert drive.state == drive.ST_INACTIVE
+    assert drive.sector == 1
+
+    drive.begin_read_phase()
+    assert drive.state == drive.ST_HDR
+    assert drive.sector == 1
+
+    drive.begin_read_phase()
+    assert drive.state == drive.ST_DATA
+    assert drive.sector == 1
+
+    drive.begin_read_phase()
+    assert drive.state == drive.ST_HDR
+    assert drive.sector == 2

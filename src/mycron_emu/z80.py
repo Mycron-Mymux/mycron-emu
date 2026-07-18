@@ -177,7 +177,6 @@ def get_regs():
 
         "IFF1": int(r.IFF1),
         "IFF2": int(r.IFF2),
-        # "HALT": int(r.HALT),
         "IM": int(r.IM),
         "I": int(r.I),
         "R": int(r.R),

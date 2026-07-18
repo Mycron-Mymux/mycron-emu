@@ -21,6 +21,5 @@ setup(
             "mycron=mycron_emu.cli.mycron:main",
             "makedisk=mycron_emu.cli.makedisk:main",
         ],
-    },    
+    },
 )
-

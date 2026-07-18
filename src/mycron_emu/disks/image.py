@@ -21,7 +21,7 @@ SECTORS=26
 SECTOR_SIZE=128
 IMG_LEN = TRACKS * SECTORS * SECTOR_SIZE
 
-log_dimg = logging.getLogger("mycron.trace.diskimg")
+log_dimg = logging.getLogger("mycron.diskimg")
 
 def ts_to_secno(track, sector):
     return track * SECTORS + sector - 1

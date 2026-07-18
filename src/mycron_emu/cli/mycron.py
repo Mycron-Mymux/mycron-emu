@@ -32,6 +32,7 @@ def main(argv=None):
     try:
         return run_emulator(args)
     except KeyboardInterrupt:
+        print("\nEmulator stopped by keyboard interrupt.", file=sys.stderr)
         return 130
 
 

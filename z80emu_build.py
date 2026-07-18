@@ -38,7 +38,7 @@ ffibuilder.set_source(
     ],
     include_dirs = [
         str(CSRC),
-    ], 
+    ],
     libraries=[
         "z80ex",
         "z80ex_dasm",

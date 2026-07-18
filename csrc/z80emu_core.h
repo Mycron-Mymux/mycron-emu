@@ -19,7 +19,6 @@ typedef struct {
 
     unsigned int IFF1;
     unsigned int IFF2;
-    /* unsigned int HALT; */
     unsigned int IM;
     unsigned int I;
     unsigned int R;
