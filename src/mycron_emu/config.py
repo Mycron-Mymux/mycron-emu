@@ -78,9 +78,6 @@ def read_config(dname):
     return conf
 
 
-
-
-
 if __name__ == "__main__":
     import sys
     cdir = "run-tst"

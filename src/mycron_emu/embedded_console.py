@@ -110,7 +110,7 @@ def start_pty_console(path, namespace, banner=None):
         if banner is None:
             banner_text = (
                 "Embedded simulator Python console\n"
-                "Available names: "
+                + "Available names: "
                 + ", ".join(sorted(namespace.keys()))
                 + "\n"
             )

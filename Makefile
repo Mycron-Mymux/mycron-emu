@@ -26,10 +26,13 @@ install_local:
 
 # while experimenting with llm tools, not intended for the distribution
 snapshot:
-	python zzextra/make_snapshot.py 
+	python zzextra/make_snapshot.py
 	@head -40 zzextra/tmp/project-snapshot.txt
 	wc zzextra/tmp/project-snapshot.txt
 
+white:
+	python zzextra/check_whitespace.py *.py *.md Makefile *.toml *.ini .gitignore \
+	    $(shell find src -iname \*.py) $(shell find csrc -iname \*.h -o -iname \*.c)
 
 wc:
 	@wc *.py $(shell find src -iname \*.py) $(shell find csrc -iname \*.h -o -iname \*.c)

@@ -1,5 +1,32 @@
 #!/usr/bin/env python
 
+"""The thwo main board types I have available use two different UARTS.
+
+The DIM-1001 (i8080 based) card uses a 40-pin TMS6011NC (extra marking: AP
+7714 on card 3191). It is wired to io port 0 (data) and 1 (control). Baud
+rates etc are probably wired to control pins instead of using control
+registers.
+
+The DIM-1003 (Z80 based) card uses Z80 SIO chips. These have two serial
+ports: port A and port B. The monitor PROMs use port B for the console.
+On the DIO-1003:
+- port A is mapped to io addr 0xd (control) and 0xc (data)
+- port B is mapped to io addr 0xf (control) and 0xe (data)
+
+With the exception of WR0, each register write requires two bytes:
+- one byte with D2-D0 selecting a register
+- the next byte with the value for the register
+z80 peripherals page 293 (of 330)
+
+For the purpose of this emulator, the same logic can be used to emulate
+both UART types as they use the same polling loging to inspect state (RX/TX
+ready) and read/transmit data.
+
+Future updates/TODO:
+- Mymux needs a 4-port serial card for the multicomputer code (maybe two SIOs?).
+"""
+
+
 import time
 import heapq
 from collections import deque
@@ -11,38 +38,25 @@ from mycron_emu import tracing
 io_log = logging.getLogger("mycron.io")
 
 
-# TODO: generalize to support more UARTs / serial boards.
-# - Mymux needs a 4-port serial card for the multicomputer code.
-# The manual is a bit messy. You have to read through loads of stuff of how to do things before
-# it tells you how to read and write to the various registers. It would have been nice to know
-# that _before_ talking about the sequences of the registers.
-# With the exception of WR0, each register write requires two bytes:
-# - one byte with D2-D0 selecting a register
-# - the next byte with the value for the register
-# z80 peripherals page 293 (of 330)
-#
-class IOSerial(IODevice):
-    """Serial ports on the DIM-1003.
-    Not sure what port A is used for or whether it is actually used.
-    Port B is the one that seems to be mapped to c-onsole I/O.
-    """
-    BC = 0xf
-    BD = 0xe
-    AC = 0xd
-    AD = 0xc
-    PORTS = (AC, AD, BC, BD)
 
-    def __init__(self, output, **kvals):
-        super().__init__(**kvals)
+class SerialPort(IODevice):
+    """Generic serial port providing the necessary functionality for the
+    DIM-1001 and DIM-1003 ports. It only emulates the actual ports and
+    is intended to be used for compositioning by the other classes in this file.
+    It is based on the observed use from the DIM-1003 proms for the Z80 SIO.
+    """
+    def __init__(self, *, data_port, control_port, output=None, name="serial", **kwargs):
+        super().__init__(**kwargs)
+        self.data_port = data_port
+        self.control_port = control_port
+        self.PORTS = (data_port, control_port)
+
+        self.name =name
         self.output = output
         self.input_bytes = deque()
         self.scheduled_input = []
-        self.started_at = time.monotonic()
-        # next register to write if write-reg contains data pointers
-        self.next_reg = {
-            self.AC: 0,
-            self.BC: 0
-        }
+        self.selected_wr = 0
+        self.write_registers = [0] * 8
 
     def queue_bytes(self, data):
         """Queue bytes delivered"""
@@ -65,56 +79,111 @@ class IOSerial(IODevice):
             _, data = heapq.heappop(self.scheduled_input)
             self.input_bytes.extend(data)
 
-    def _write_serial_ctrl(self, port, val):
-        """Emulate write to console serial port's ctrl register"""
-        # A bit clumsy as a first take on the register write sequences
-        # This is incomplete and is just there to detect if something interesting is set up on the serial channel.
-        if val != 0 or self.next_reg[self.BC] > 0:
-            # 0 is typically used when polling
-            tracing.write(f"IOSER  OUT[{port:2x}] = {val:2x},  ser_BC reg was {self.next_reg[self.BC]:2x}: ",
-                            pc_offset=tracing.PC_OFFSET_STD_IO)
-            # io_trace.debug(f"IOSER write CB reg {self.next_reg[self.BC]} - {port:2x} {val:2x}")
-            if self.next_reg[self.BC] == 0:
-                if val & 0x7 > 0:
-                    # io_trace.debug(f"IOSER --- next reg is {val&0x7}")
-                    self.next_reg[self.BC] = val & 0x7
-            else:
-                self.next_reg[self.BC] = 0
-        else:
-            self.next_reg[self.BC] = 0
+    def rx_ready(self):
+        self._release_scheduled_input()
+        return bool(self.input_bytes)
 
+    def tx_ready(self):
+        return True
 
-    def write(self, port, val):
-        """Emulate a write to a console"""
-        match port:
-            case self.BD:
-                # Emulate write to console (sio B).
-                if self.output is not None:
-                    self.output.write(bytes([val]))
-                    self.output.flush()
-            case self.BC:
-                self._write_serial_ctrl(port, val)
+    def read_control(self):
+        # For polling mode:
+        # bit 2 : just indicate that it's always ready to transmit more (4)
+        # bit 0 : whether there is data queued (1 or 0).
+        return 4 | bool(self.input_bytes)
+
+    def read_data(self):
+        if self.input_bytes:
+            return self.input_bytes.popleft()
+        io_log.warning(f"read from empty serial port {port}. Returning 0 {tracing.pc_disasm_str()}")
 
     def read(self, port):
         self._release_scheduled_input()
-
-        if port == self.BC:
-            # For polling mode, just indicate that it's always ready to transmit more (4) +
-            # whether there is data queued (1 or 0).
+        if port == self.control_port:
             return 4 | bool(self.input_bytes)
-        if port == self.BD:
-            if self.input_bytes:
-                return self.input_bytes.popleft()
-            io_log.warning(f"read from empty serial port {port}. Returning 0 {tracing.pc_disasm_str()}")
-            return 0
-
-        io_log.warning(f"({self}): unknown port {port}. Supporting one of {self.BD=} {self.BC=} {tracing.pc_disasm_str()}")
-        return 0
+        if port == self.data_port:
+            return self.read_data()
 
 
-class IOSerialDim1001(IOSerial):
-    # The serial port for the console on DIM 1001 uses a different UART and different ports.
-    # TODO: __init__ might reference parent vals
-    BC = 1
-    BD = 0
-    PORTS = (BC, BD)
+    def _write_serial_ctrl(self, port, value):
+        """Emulate write to console serial port's ctrl register"""
+        # A bit clumsy as a first take on the register write sequences
+        # This is incomplete and is just there to detect if something interesting
+        # is set up on the serial channel.
+        if self.selected_wr:
+            self.write_registers[self.selected_wr] = value
+            self.selected_wr = 0
+            return
+        register = value & 0x07
+        if register:
+            self.selected_wr = register
+        else:
+            # WR0 command. The PROM commonly writes zero before
+            # polling status; retaining it is sufficient initially.
+            self.write_registers[0] = value
+
+    def write(self, port, val):
+        """Emulate a write to a serial port"""
+        match port:
+            case self.data_port:
+                if self.output is not None:
+                    self.output.write(bytes([val]))
+                    self.output.flush()
+            case self.control_port:
+                self._write_serial_ctrl(port, val)
+
+
+class SerialDIM1001:
+    """The serial port for the console on DIM 1001 uses a different UART (TMS6011NC)
+    and different ports (0 and 1).
+    The i8080 monitor prom doesn't try to write to the control registers through the
+    serial port's control io port, so it appears safe re-use the same port
+    for the 1001 as well.
+    See module comments for more information.
+    """
+    def __init__(self, *, output=None):
+        self.console = SerialPort(
+            data_port = 0x00,
+            control_port = 0x01,
+            output = output,
+            name="TMS60011 console for DIM1001")
+
+    def register_ports(self, port_registry, ports=None):
+        self.console.register_ports(port_registry)
+
+    def queue_bytes(self, data):
+        self.console.queue_bytes(data)
+
+    def schedule_bytes(self, delay, data):
+        self.console.schedule_bytes(delay, data)
+
+class SerialDIM1003:
+    """Serial ports on the DIM-1003, using a Z80 SIO.
+    Port B is used as the main console.
+    Port A appears to be used as an aux output, selected depending on
+    the data input from what is connected to the PIO.
+    See module comments for more information.
+    """
+    def __init__(self, *, output=None, aux_output=None):
+        # Console uses port B
+        self.console = SerialPort(
+            data_port = 0x0e,
+            control_port = 0x0f,
+            output = output,
+            name="Z80 SIO console")
+        # aux (used by redirect_print and MSYSTEM boot) uses port A
+        self.aux = SerialPort(
+            data_port = 0x0c,
+            control_port = 0x0d,
+            output = aux_output,
+            name="Z80 SIO aux")
+
+    def register_ports(self, port_registry, ports=None):
+        self.console.register_ports(port_registry)
+        self.aux.register_ports(port_registry)
+
+    def queue_bytes(self, data):
+        self.console.queue_bytes(data)
+
+    def schedule_bytes(self, delay, data):
+        self.console.schedule_bytes(delay, data)

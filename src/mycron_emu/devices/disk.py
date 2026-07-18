@@ -1,7 +1,5 @@
 #!/usr/bin/env python
 
-# diskcontroller.py
-
 import logging
 
 from mycron_emu.devices.base import IODevice
@@ -437,5 +435,3 @@ class IODiskController(IODevice):
             tracing.write(f"DSK_INP {pre:10} [{port:02x}] : {hex(val):6}",
                             include_stack=True, pc_offset=PC_OFFSET_STD_IO)
         return val
-
-

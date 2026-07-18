@@ -101,20 +101,3 @@ class IOCTC(IOIgnore):
     def read(self, port):
         tracing.write(f"IOCTC INP [{port:02x}] : 0x{self.default_rval:x}", pc_offset=PC_OFFSET_STD_IO)
         return self.default_rval
-
-
-class IOPar(IOIgnore):
-    """Parallel I/O"""
-    AD = 0x4   # Port A data
-    BD = 0x5   # Port B data
-    AC = 0x6   # Port A control
-    BC = 0x7   # Port B control
-    PORTS = (AC, AD, BC, BD)
-
-    def write(self, port, val):
-        tracing.write(f"IOPAR OUT [{port:02x}] = {val:02x}", pc_offset=PC_OFFSET_STD_IO)
-    def read(self, port):
-        tracing.write(f"IOPAR INP [{port:02x}] : 0x{self.default_rval:x}", pc_offset=PC_OFFSET_STD_IO)
-        return self.default_rval
-
-
