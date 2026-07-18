@@ -95,7 +95,8 @@ class SerialPort(IODevice):
     def read_data(self):
         if self.input_bytes:
             return self.input_bytes.popleft()
-        io_log.warning(f"read from empty serial port {port}. Returning 0 {tracing.pc_disasm_str()}")
+        io_log.warning(f"read from empty serial port {self.data_port}. Returning 0 {tracing.pc_disasm_str()}")
+        return 0
 
     def read(self, port):
         self._release_scheduled_input()
