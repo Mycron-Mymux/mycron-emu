@@ -28,21 +28,71 @@ static byte irq_vector = 0xff;
 
 
 // -------------------- diagnostics --------------------
+
+static z80emu_log_cb_t cb_log = NULL;
+
+void z80emu_set_log_callback(z80emu_log_cb_t callback)
+{
+    cb_log = callback;
+}
+#define LOG_MESSAGE_SIZE 1024
+
+static void emu_vlog(
+    int channel,
+    int level,
+    const char *format,
+    va_list args
+)
+{
+    char message[LOG_MESSAGE_SIZE];
+
+    vsnprintf(message, sizeof(message), format, args);
+
+    if (cb_log != NULL) {
+        cb_log(channel, level, message);
+        return;
+    }
+
+    /*
+     * Fallback for non-Python callers or operation before a callback
+     * has been installed.
+     */
+    FILE *stream = stderr;
+
+    if (level >= Z80EMU_LOG_WARNING) {
+        fprintf(stream, "WARNING: %s\n", message);
+    } else {
+        fprintf(stream, "%s\n", message);
+    }
+}
+
+
 static void emu_trace(const char *format, ...)
 {
     va_list args;
 
     va_start(args, format);
-    vfprintf(stderr, format, args);
+    emu_vlog(
+        Z80EMU_LOG_TRACE,
+        Z80EMU_LOG_DEBUG,
+        format,
+        args
+    );
     va_end(args);
 }
+
 
 static void emu_warn(const char *format, ...)
 {
     va_list args;
 
     va_start(args, format);
-    vfprintf(stderr, format, args);
+    emu_vlog(
+        Z80EMU_LOG_STATUS,
+        Z80EMU_LOG_WARNING,
+        format,
+        args
+    );
     va_end(args);
 }
 
@@ -116,7 +166,7 @@ static Z80EX_BYTE emu_mread_cb(
         char txt[120];
         emu_disasm(pc, txt, sizeof(txt));
 
-        emu_trace("RD %04x -> %02x pc %04x instr: %s\n",
+        emu_trace("RD %04x -> %02x pc %04x instr: %s",
                   a, val, pc, txt);
     }
 
@@ -147,12 +197,12 @@ static void emu_mwrite_cb(
         char txt[120];
         emu_disasm(pc, txt, sizeof(txt));
 
-        emu_trace("WR %04x : %02x -> %02x pc %04x instr: %s\n",
+        emu_trace("WR %04x : %02x -> %02x pc %04x instr: %s",
                a, memory[a], v, pc, txt);
     }
 
     if (memory_prot[a]) {
-        emu_trace("WR---ignore write to protected addr %04x wr %02x\n", a, v);
+        emu_trace("WR---ignore write to protected addr %04x wr %02x", a, v);
         return;
     }
 
@@ -176,7 +226,7 @@ static Z80EX_BYTE emu_pread_cb(
     byte p = port & 0xff;
 
     if (cb_io_in == NULL) {
-        emu_trace("Z80_In %02x\n", p);
+        emu_trace("Z80_In %02x", p);
         return 0;
     }
 
@@ -198,7 +248,7 @@ static void emu_pwrite_cb(
     byte v = value & 0xff;
 
     if (cb_io_out == NULL) {
-        emu_trace("Z80_Out %02x <- %02x\n", p, v);
+        emu_trace("Z80_Out %02x <- %02x", p, v);
         return;
     }
 
@@ -253,7 +303,7 @@ void z80emu_reset(void)
     );
 
     if (cpu == NULL) {
-        emu_warn("z80ex_create failed\n");
+        emu_warn("z80ex_create failed");
         abort();
     }
 
@@ -283,7 +333,7 @@ static void emu_step(void)
         char txt[120];
         emu_disasm(pc, txt, sizeof(txt));
 
-        emu_trace("TRACK_EXEC: about to execute instruction at %04x: %s\n",
+        emu_trace("TRACK_EXEC: about to execute instruction at %04x: %s",
                   pc, txt);
     }
 
@@ -338,11 +388,11 @@ void z80emu_mem_set_prot(unsigned int start, unsigned int end, byte value)
     if (start > Z80_MEM_SIZE ||
         end > Z80_MEM_SIZE ||
         start > end) {
-        emu_warn("WARNING: illegal mem_set_prot addr range: %d -> %d -- ignoring range\n", start, end);
+        emu_warn("illegal mem_set_prot addr range: %d -> %d -- ignoring range", start, end);
         return;
     }
 
-    emu_trace("Setting memory protection for region 0x%x to 0x%x to %d\n",
+    emu_trace("Setting memory protection for region 0x%x to 0x%x to %d",
               start, end, value);
 
     for (unsigned int a = start; a < end; a++) {
@@ -356,7 +406,7 @@ void z80emu_mem_set_track_mask(unsigned int start, unsigned int end, byte mask)
     if (start > Z80_MEM_SIZE ||
         end > Z80_MEM_SIZE ||
         start > end) {
-        emu_warn("WARNING: illegal mem_set_track_mask addr range: %d -> %d -- ignoring range\n", start, end);
+        emu_warn("illegal mem_set_track_mask addr range: %d -> %d -- ignoring range", start, end);
         return;
     }
 
@@ -371,7 +421,7 @@ void z80emu_mem_unset_track_mask(unsigned int start, unsigned int end, byte mask
     if (start > Z80_MEM_SIZE ||
         end > Z80_MEM_SIZE ||
         start > end) {
-        emu_warn("WARNING: illegal mem_unset_track_mask addr range: %d -> %d -- ignoring range\n", start, end);
+        emu_warn("illegal mem_unset_track_mask addr range: %d -> %d -- ignoring range", start, end);
         return;
     }
 

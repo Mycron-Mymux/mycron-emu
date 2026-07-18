@@ -38,6 +38,27 @@ enum {
     Z80_MEM_SIZE = (64 * 1024)
 };
 
+enum z80emu_log_channel {
+    Z80EMU_LOG_STATUS = 0,
+    Z80EMU_LOG_TRACE  = 1
+};
+
+enum z80emu_log_level {
+    Z80EMU_LOG_DEBUG    = 10,
+    Z80EMU_LOG_INFO     = 20,
+    Z80EMU_LOG_WARNING  = 30,
+    Z80EMU_LOG_ERROR    = 40,
+    Z80EMU_LOG_CRITICAL = 50
+};
+
+typedef void (*z80emu_log_cb_t)(
+    int channel,
+    int level,
+    const char *message
+);
+
+void z80emu_set_log_callback(z80emu_log_cb_t callback);
+
 void z80emu_reset(void);
 
 void z80emu_run_steps(unsigned long n);

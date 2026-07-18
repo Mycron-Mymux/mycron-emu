@@ -5,7 +5,6 @@ import io
 from mycron_emu.config import read_console_script
 
 
-
 def test_console_script_supports_escapes_and_cumulative_delays(tmp_path):
     script = tmp_path / "startup.jsonl"
     script.write_text(
