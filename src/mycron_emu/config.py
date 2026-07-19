@@ -71,10 +71,6 @@ def read_config(dname):
                 continue
             conf[key.strip()] = value.strip()
 
-    conf['disk-images'] = [
-        str(path)
-        for path in sorted(dname.glob("disk-??.img"))]
-
     return conf
 
 

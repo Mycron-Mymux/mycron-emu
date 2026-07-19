@@ -27,8 +27,6 @@ Future updates/TODO:
 """
 
 
-import time
-import heapq
 from collections import deque
 import logging
 
@@ -50,7 +48,7 @@ class SerialPort(IODevice):
         self.control_port = control_port
         self.PORTS = (data_port, control_port)
 
-        self.name =name
+        self.name = name
         self.output = output
         self.input_bytes = deque()
         self.selected_wr = 0
@@ -107,8 +105,7 @@ class SerialPort(IODevice):
 
     def _write_data(self, val):
         if self.output is not None:
-            self.output.write(bytes([val]))
-            self.output.flush()
+            self.output(bytes([val]))
 
     def write(self, port, val):
         """Emulate a write to a serial port"""

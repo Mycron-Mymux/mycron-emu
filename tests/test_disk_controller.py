@@ -2,8 +2,8 @@
 
 # tests/test_disk.py
 from mycron_emu.devices.disk import DiskDrive, IODiskController
+from mycron_emu.devices.serial import SerialPort
 from mycron_emu.disks.image import DiskImage, TRACKS, SECTORS
-
 
 def make_images(count=8):
     return [
@@ -97,3 +97,15 @@ def test_read_phase_advances_to_next_sector_after_data_phase():
     drive.begin_read_phase()
     assert drive.state == drive.ST_HDR
     assert drive.sector == 2
+
+def test_serial_output_is_sent_to_sink():
+    output = []
+    serial = SerialPort(
+        data_port=0x01,
+        control_port=0x02,
+        output=output.append,
+    )
+
+    serial.write(serial.data_port, 0x41)
+
+    assert output == [b"A"]

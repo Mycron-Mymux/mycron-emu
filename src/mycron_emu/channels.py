@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 from collections.abc import Callable
 from typing import Generic, TypeVar
@@ -10,12 +11,12 @@ T = TypeVar("T")
 
 log = logging.getLogger("mycron.channels")
 
-
 class Channel(Generic[T]):
     """A synchronous in-process fan-out channel."""
 
-    def __init__(self, name: str):
+    def __init__(self, name: str, *, suppress_listener_errors=False):
         self.name = name
+        self.suppress_listener_errors = suppress_listener_errors
         self._listeners: dict[int, Callable[[T], None]] = {}
         self._next_id = 0
 
@@ -42,28 +43,16 @@ class Channel(Generic[T]):
             except (KeyboardInterrupt, SystemExit):
                 raise
             except Exception:
+                if not self.suppress_listener_errors:
+                    raise
                 # One failed monitor should not prevent other monitors from
                 # receiving guest output.
-                log.exception(
-                    "Listener failed on channel %s",
-                    self.name,
-                )
+                log.exception("Listener failed on channel %s", self.name)
 
 
-class ChannelRegistry:
-    def __init__(self):
-        self._channels: dict[str, Channel] = {}
-
-    def create(self, name: str) -> Channel:
-        if name in self._channels:
-            raise ValueError(f"channel already exists: {name!r}")
-
-        channel = Channel(name)
-        self._channels[name] = channel
-        return channel
-
-    def get(self, name: str) -> Channel:
-        try:
-            return self._channels[name]
-        except KeyError:
-            raise KeyError(f"unknown channel: {name!r}") from None
+@dataclass
+class EmulatorChannels:
+    console_input: Channel[bytes]
+    console_output: Channel[bytes]
+    aux_input: Channel[bytes]
+    aux_output: Channel[bytes]

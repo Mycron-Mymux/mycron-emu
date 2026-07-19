@@ -32,7 +32,7 @@ from mycron_emu.embedded_console import start_pty_console
 from mycron_emu.disks import image as diskimage
 from mycron_emu import tracing
 from mycron_emu.boards import BOARD_TYPES
-from mycron_emu.channels import ChannelRegistry
+from mycron_emu.channels import Channel, EmulatorChannels
 from mycron_emu.scheduler import ScheduledSender
 
 log = logging.getLogger("mycron.status")
@@ -43,13 +43,14 @@ io_trace = logging.getLogger("mycron.trace.io")
 disk_trace = logging.getLogger("mycron.trace.disk")
 
 
-def check_console(board, ch_in, poller):
+def check_console(chan_send, ch_in, poller):
     # Keyboard / Console input
     if not poller.poll(0):
         return
 
     data = ch_in.read(1)
-    if not data:     # Even a null byte registers as true
+    if not data:
+        # EOF. A NUL byte is b"\x00" and is not treated as EOF.
         poller.unregister(ch_in.fileno())
         return
 
@@ -60,7 +61,7 @@ def check_console(board, ch_in, poller):
         # doesn't understand newline (\n), so translate to CR (\r)
         ch = 0xd
 
-    board.sport.queue_bytes(bytes([ch]))
+    chan_send(bytes([ch]))
 
 
 # Used to pause and continue the simulator.
@@ -90,7 +91,7 @@ def sim_paused_context():
             sim_cont()
 
 
-def run_sim(board, ch_in, ch_in_p, scheduled_input, steps_per_chunk=1000):
+def run_sim(board, channels, ch_in, ch_in_p, scheduled_input, steps_per_chunk=1000):
     """Starts the simulator
     steps_per_chunk is how many steps the z80 C library should run before returning to Python
     for another iteration. Too many steps means the console and some other functions
@@ -105,7 +106,7 @@ def run_sim(board, ch_in, ch_in_p, scheduled_input, steps_per_chunk=1000):
             continue
 
         scheduled_input.poll()
-        check_console(board, ch_in, ch_in_p)
+        check_console(channels.console_input.send, ch_in, ch_in_p)
         z80.run_steps(steps_per_chunk)
 
         # Performance monitoring at startup
@@ -163,30 +164,60 @@ def schedule_startup_script(scheduler, config):
         scheduler.schedule_at(start + offset, data)
 
 
+def raw_stream_sink(stream):
+    """Used to create channel sinks that write to files or streams with
+    a write method and (optionally) a flush method."""
+    def send(data: bytes):
+        stream.write(data)
+
+        flush = getattr(stream, "flush", None)
+        if flush is not None:
+            flush()
+
+    return send
+
+def text_stream_sink(stream, *, encoding="ascii", errors="replace"):
+    def send(data: bytes):
+        stream.write(data.decode(encoding, errors=errors))
+        stream.flush()
+    return send
+
+
+def load_disk_images(run_dir):
+    """Returns 8 disk images by either reading the file disk-XX.img from
+    the run directory, or, if any file is missing, injecting empty images.
+    NB: The empty images are there as the current emulator will crash if
+    an image is missing. To deal with "non-inserted" disks, there needs
+    to be a further examination of how the proms deal with disks
+    that are not present before, during or after read or write operations.
+    """
+    log.info(f"Using disk image(s) from {run_dir}")
+    run_dir = Path(run_dir)
+    images = []
+
+    for drive_number in range(8):
+        path = run_dir / f"disk-{drive_number:02}.img"
+        if path.exists():
+            image = diskimage.DiskImage.from_file(path)
+        else:
+            image = diskimage.DiskImage.empty_image(path, read_from_file=True)
+        images.append(image)
+
+    return images
+
+
 def run_emulator(args):
     z80.reset()
     config = make_config(args)
 
-    registry = ChannelRegistry()
-    console_input = registry.create("console.input")
-    console_output = registry.create("console.output")
-    aux_output = registry.create("aux.output")
-    printer_output = registry.create("printer.output")
+    channels = EmulatorChannels(
+        console_input = Channel("console_input", suppress_listener_errors=False),
+        console_output = Channel("console_output", suppress_listener_errors=True),
+        aux_input = Channel("aux_input"),
+        aux_output = Channel("aux_output"),
+    )
 
-    # TODO: Hack since there is currently no clean way of failing if a
-    # non-existing disk is requested in the controller. The emulator currently
-    # just crashes.
-    # This adds some default images, with write-through if any image is modified.
-    # Non-existing images will be created on the disk on the first write.
-    log.info(f"Using disk image(s) from {config['disk-images']}")
-    d_imgs = [diskimage.DiskImage.from_file(dname) for dname in config['disk-images']]
-
-    if len(d_imgs) > 8:
-        raise ValueError(f"disk controller supports at most 8 images, got {len(d_imgs)}")
-
-    for drivenum in range(len(d_imgs), 8):
-        path = Path(config['run-dir']) / f"disk-{drivenum:02}.img"
-        d_imgs.append(diskimage.DiskImage.empty_image(path))
+    d_imgs = load_disk_images(config['run-dir'])
 
     with open(config["console_in"], "rb", buffering=0) as console_in, \
          open(config["console_out"], "wb", buffering=0) as console_out:
@@ -195,17 +226,26 @@ def run_emulator(args):
             supported = ", ".join(sorted(BOARD_TYPES))
             raise ValueError(f"unsupported board {config['board']!r}; expected one of: {supported}")
 
-        board = board_type(config, d_imgs, console_out)
+        board = board_type(config, d_imgs, channels)
 
-        scheduled_input = ScheduledSender(board.sport.queue_bytes)
+        # Wire up channels for input/output which opens up for more flexible console and other io.
+        # NB: Aux is just wired up to stdout for now. This will have to do for now until we
+        # can figure out more about what it is supposed to be doing. It will probably need some
+        # config or parameter in the future. Also: aux input is not wired up to anything.
+        channels.console_input.subscribe(board.sport.queue_bytes)
+        stdout_sink = raw_stream_sink(console_out)
+        channels.console_output.subscribe(stdout_sink)
+        aux_sink = raw_stream_sink(sys.stdout.buffer)
+        channels.aux_output.subscribe(aux_sink)
+
+        # Scheduled input and scripts
+        scheduled_input = ScheduledSender(channels.console_input.send)
+        if config['send']:
+            scheduled_input.schedule_after(0.3, config['send'])
+        schedule_startup_script(scheduled_input, config)
 
         set_in_callback(board.io_in)
         set_out_callback(board.io_out)
-
-        if config['send']:
-            scheduled_input.schedule_after(0.3, config['send'])
-
-        schedule_startup_script(scheduled_input, config)
 
         # Slightly hacky, but this lets us read from the serial port and put it in the
         # queue of the emulator's serial port.
@@ -220,6 +260,6 @@ def run_emulator(args):
 
         # track cpm loading
         # z80.mem_set_track_mask(0xee00, 0xffff, z80.TRACK_EXEC)
-        run_sim(board, console_in, console_in_p, scheduled_input)
+        run_sim(board, channels, console_in, console_in_p, scheduled_input)
 
     return 0

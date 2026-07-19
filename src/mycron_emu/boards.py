@@ -13,11 +13,11 @@ from mycron_emu.prom import PromRegion
 log = logging.getLogger("mycron.status")
 
 class Board:
-    def __init__(self, config, d_imgs, console_output):
+    def __init__(self, config, d_imgs, channels):
         self.config = config
         self.d_imgs = d_imgs
         self.proms = []
-        self.console_output = console_output
+        self.channels = channels
         # Set up I/O address space
         self.io_ports = {}
         self.unknown_io = IOPrint()
@@ -35,15 +35,15 @@ class Board:
 
 
 class Board1001(Board):
-    def __init__(self, config, d_imgs, console_output):
-        super().__init__(config, d_imgs, console_output)
+    def __init__(self, config, d_imgs, channels):
+        super().__init__(config, d_imgs, channels)
 
         # Dim 1001 uses only one prom chip.
         self.proms.append(PromRegion(Path(config['run-dir'], config['prom0']), 0x0))
 
         # I/O ports
         # self.sport = IOSerialDim1001(console_output)
-        self.sport = SerialDIM1001(output=console_output)
+        self.sport = SerialDIM1001(output=channels.console_output.send)
         self.sport.register_ports(self.io_ports)
 
         self.dsk = IODiskController(d_imgs)
@@ -51,8 +51,8 @@ class Board1001(Board):
 
 
 class Board1003(Board):
-    def __init__(self, config, d_imgs, console_output):
-        super().__init__(config, d_imgs, console_output)
+    def __init__(self, config, d_imgs, channels):
+        super().__init__(config, d_imgs, channels)
 
         # Dim 1003 uses two proms. The second one is mapped at 0x1000, leaving a region of RAM between the chips.
         self.proms.append(PromRegion(Path(config['run-dir'], config['prom0']), 0x0))
@@ -60,7 +60,9 @@ class Board1003(Board):
 
         # I/O ports
         # self.sport = IOSerial(console_output)
-        self.sport = SerialDIM1003(output=console_output)
+        self.sport = SerialDIM1003(
+            output=channels.console_output.send,
+            aux_output=channels.aux_output.send)
         self.sport.register_ports(self.io_ports)
 
         self.pport = Z80PioPrinter()
