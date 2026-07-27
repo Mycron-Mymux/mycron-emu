@@ -41,7 +41,10 @@ class Z80PioPrinter(IODevice):
     def read(self, port):
         tracing.write(f"IOPAR INP [{port:02x}]", pc_offset=tracing.PC_OFFSET_STD_IO)
         if port == self.B_DATA:
-            return 0xff          # Select SIO-A in redirect_print.
+            # Select SIO-A in redirect_print. This intentionally selects SIO A as the output
+            # device for the redirectable output in the PROM. See comments in docstrings for
+            # this module.
+            return 0xff
         if port == self.A_DATA:
             return self.a_data   # Optional harmless latch readback.
         return 0xff              # Control-port reads are not used by this PROM.

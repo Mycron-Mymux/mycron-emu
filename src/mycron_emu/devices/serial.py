@@ -42,13 +42,14 @@ class SerialPort(IODevice):
     is intended to be used for compositioning by the other classes in this file.
     It is based on the observed use from the DIM-1003 proms for the Z80 SIO.
     """
-    def __init__(self, *, data_port, control_port, output=None, name="serial", **kwargs):
+    def __init__(self, *, data_port, control_port, output=None, status_mask=0,  name="serial", **kwargs):
         super().__init__(**kwargs)
         self.data_port = data_port
         self.control_port = control_port
         self.PORTS = (data_port, control_port)
 
         self.name = name
+        self.status_mask = status_mask
         self.output = output
         self.input_bytes = deque()
         self.selected_wr = 0
@@ -68,9 +69,11 @@ class SerialPort(IODevice):
 
     def _read_control(self):
         # For polling mode:
+        # bit 3 : DCD (data carrier detect), used by port_SA_try_write in the z80 proms. (8)
+        #         made it optional here.
         # bit 2 : just indicate that it's always ready to transmit more (4)
         # bit 0 : whether there is data queued (1 or 0).
-        return 4 | bool(self.input_bytes)
+        return self.status_mask | 4 | bool(self.input_bytes)
 
     def _read_data(self):
         if self.input_bytes:
@@ -156,6 +159,7 @@ class SerialDIM1003:
         self.aux = SerialPort(
             data_port = 0x0c,
             control_port = 0x0d,
+            status_mask=0x08,   # DCD - data carrier detected
             output = aux_output,
             name="Z80 SIO aux")
 
