@@ -21,7 +21,7 @@ Ideas:
 import time
 import sys
 import select
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 import logging
 
@@ -43,25 +43,48 @@ io_trace = logging.getLogger("mycron.trace.io")
 disk_trace = logging.getLogger("mycron.trace.disk")
 
 
-def check_console(chan_send, ch_in, poller):
-    # Keyboard / Console input
-    if not poller.poll(0):
-        return
 
-    data = ch_in.read(1)
-    if not data:
-        # EOF. A NUL byte is b"\x00" and is not treated as EOF.
-        poller.unregister(ch_in.fileno())
-        return
-
-    # The console doesn't like 8-bit ascii, so limit it to 7-bit.
+def normalize_console_input(data):
+    """Apply the guest console's input conventions to one byte."""
     ch = data[0] & 0x7f
 
-    if ch == 0xa:
-        # doesn't understand newline (\n), so translate to CR (\r)
-        ch = 0xd
+    if ch == 0x0a:
+        # The guest console expects CR rather than LF.
+        ch = 0x0d
 
-    chan_send(bytes([ch]))
+    return bytes([ch])
+
+
+def register_input(poller, routes, stream, destination, transform=None):
+    """Register a readable stream and its channel destination."""
+    fd = stream.fileno()
+    poller.register(fd, select.POLLIN)
+    routes[fd] = (stream, destination, transform)
+
+
+def poll_inputs(poller, routes):
+    """Poll all registered host streams and route available input."""
+    for fd, event in poller.poll(0):
+        route = routes.get(fd)
+        if route is None:
+            continue
+
+        stream, destination, transform = route
+
+        if event & select.POLLIN:
+            data = stream.read(1)
+
+            if data:
+                if transform is not None:
+                    data = transform(data)
+                destination(data)
+                continue
+
+        # POLLIN with no data means EOF. Error and hangup events also remove
+        # the stream. A NUL byte is b"\x00" and is therefore not EOF.
+        if event & (select.POLLIN | select.POLLHUP | select.POLLERR | select.POLLNVAL):
+            poller.unregister(fd)
+            routes.pop(fd, None)
 
 
 # Used to pause and continue the simulator.
@@ -91,7 +114,7 @@ def sim_paused_context():
             sim_cont()
 
 
-def run_sim(board, channels, ch_in, ch_in_p, scheduled_input, steps_per_chunk=1000):
+def run_sim(board, channels, input_poller, input_routes, scheduled_input, steps_per_chunk=1000):
     """Starts the simulator
     steps_per_chunk is how many steps the z80 C library should run before returning to Python
     for another iteration. Too many steps means the console and some other functions
@@ -106,7 +129,7 @@ def run_sim(board, channels, ch_in, ch_in_p, scheduled_input, steps_per_chunk=10
             continue
 
         scheduled_input.poll()
-        check_console(channels.console_input.send, ch_in, ch_in_p)
+        poll_inputs(input_poller, input_routes)
         z80.run_steps(steps_per_chunk)
 
         # Performance monitoring at startup
@@ -145,6 +168,7 @@ def make_config(args):
     config['script_arg']       = args.script
     config['send']             = args.send
     config['embedded_console'] = args.embedded_console
+    config['aux']              = args.aux
     log.debug(config)
     return config
 
@@ -214,13 +238,23 @@ def run_emulator(args):
         console_input = Channel("console_input", suppress_listener_errors=False),
         console_output = Channel("console_output", suppress_listener_errors=True),
         aux_input = Channel("aux_input"),
-        aux_output = Channel("aux_output"),
+        aux_output = Channel("aux_output", suppress_listener_errors=True),
     )
 
     d_imgs = load_disk_images(config['run-dir'])
 
-    with open(config["console_in"], "rb", buffering=0) as console_in, \
-         open(config["console_out"], "wb", buffering=0) as console_out:
+
+    # ExitStack handles the optional aux streams without trying to put None
+    # into a multi-item with statement.
+    with ExitStack() as stack:
+        console_in = stack.enter_context(open(config["console_in"], "rb", buffering=0))
+        console_out = stack.enter_context(open(config["console_out"], "wb", buffering=0))
+
+        aux_in = None
+        aux_out = None
+        if config["aux"]:
+            aux_in = stack.enter_context(open(config["aux"], "rb", buffering=0))
+            aux_out = stack.enter_context(open(config["aux"], "wb", buffering=0))
 
         if (board_type := BOARD_TYPES.get(config['board'], None)) is None:
             supported = ", ".join(sorted(BOARD_TYPES))
@@ -228,15 +262,18 @@ def run_emulator(args):
 
         board = board_type(config, d_imgs, channels)
 
-        # Wire up channels for input/output which opens up for more flexible console and other io.
-        # NB: Aux is just wired up to stdout for now. This will have to do for now until we
-        # can figure out more about what it is supposed to be doing. It will probably need some
-        # config or parameter in the future. Also: aux input is not wired up to anything.
+        # Wire the board's serial devices to the application channels.
         channels.console_input.subscribe(board.sport.queue_bytes)
-        stdout_sink = raw_stream_sink(console_out)
-        channels.console_output.subscribe(stdout_sink)
-        aux_sink = raw_stream_sink(sys.stdout.buffer)
-        channels.aux_output.subscribe(aux_sink)
+        channels.console_output.subscribe(raw_stream_sink(console_out))
+
+        # DIM-1003 has an auxiliary input port. Boards without one simply
+        # leave the aux input channel without a subscriber.
+        if aux_queue := getattr(board.sport, "queue_aux_bytes", None):
+            channels.aux_input.subscribe(aux_queue)
+
+        # Preserve the previous stdout behavior unless -a/--aux was supplied.
+        aux_output_stream = aux_out if aux_out is not None else sys.stdout.buffer
+        channels.aux_output.subscribe(raw_stream_sink(aux_output_stream))
 
         # Scheduled input and scripts
         scheduled_input = ScheduledSender(channels.console_input.send)
@@ -247,11 +284,18 @@ def run_emulator(args):
         set_in_callback(board.io_in)
         set_out_callback(board.io_out)
 
-        # Slightly hacky, but this lets us read from the serial port and put it in the
-        # queue of the emulator's serial port.
-        # NB: need to set it to binary + unbuffered, otherwise terminal input will be buffered and not work properly
-        console_in_p = select.poll()
-        console_in_p.register(console_in.fileno(), select.POLLIN)
+        # Binary, unbuffered streams are required so PTY input is delivered
+        # immediately rather than being held in a Python buffer.
+        input_poller = select.poll()
+        input_routes = {}
+
+        register_input(input_poller, input_routes, console_in,
+                       channels.console_input.send, normalize_console_input)
+
+        if aux_in is not None:
+            # Aux data remains 8-bit clean and is not subject to the console's
+            # LF-to-CR translation.
+            register_input(input_poller, input_routes, aux_in, channels.aux_input.send)
 
         # If embedded console:
         if (ec_fn := config['embedded_console']):
@@ -260,6 +304,6 @@ def run_emulator(args):
 
         # track cpm loading
         # z80.mem_set_track_mask(0xee00, 0xffff, z80.TRACK_EXEC)
-        run_sim(board, channels, console_in, console_in_p, scheduled_input)
+        run_sim(board, channels, input_poller, input_routes, scheduled_input)
 
     return 0

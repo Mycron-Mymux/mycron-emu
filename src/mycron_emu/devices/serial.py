@@ -169,3 +169,6 @@ class SerialDIM1003:
 
     def queue_bytes(self, data):
         self.console.queue_bytes(data)
+
+    def queue_aux_bytes(self, data):
+        self.aux.queue_bytes(data)
