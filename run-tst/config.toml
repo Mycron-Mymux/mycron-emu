@@ -1,0 +1,16 @@
+# Mycron emulator TOML configuration
+#
+# Optional keys:
+#   board          – board type (default: dim-1003)
+#   prom0          – path to first PROM binary
+#   prom1          – path to second PROM binary
+#   console-tty    – single TTY path for guest console I/O (replaces -t)
+#   aux-tty        – TTY path for guest auxiliary serial I/O (replaces -a)
+#   debug-console  – TTY path for the embedded Python console (replaces -ec)
+#   script         – A script.jsonl for scheduled input to the console.
+
+prom0 = "prom-2.6z-0.bin"
+prom1 = "prom-2.6z-1.bin"
+console-tty    = "/run/user/1000/mycron-1000/console-emu"
+aux-tty        = "/run/user/1000/mycron-1000/aux-emu"
+debug-console  = "/run/user/1000/mycron-1000/debug-emu"

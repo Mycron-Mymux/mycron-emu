@@ -6,7 +6,9 @@ from mycron_emu import tracing
 
 class IODevice:
     PORTS = ()
-    def __init__(self, default_rval=0):
+    # TODO: if they used pull-up resistors, the default read value should perhaps be 0xff
+    # not 0. I'm trying the ff version for now.
+    def __init__(self, default_rval=0xff):
         self.default_rval = default_rval
 
     def write(self, port, val):

@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-
+import tomllib
 
 def read_console_script(path):
     """Yield cumulative delay and ASCII bytes from a JSON-lines script."""
@@ -50,8 +50,18 @@ def read_console_script(path):
             yield elapsed, data
 
 
-# TODO: maybe just use yaml or similar?
 def read_config(dname):
+    """Read the TOML config file and return a dict with defaults.
+
+    The TOML file (config.toml) may contain any of the following keys:
+        board          – board type (default: dim-1003)
+        prom0          – path to first PROM binary
+        prom1          – path to second PROM binary
+        console-tty    – single TTY path for guest console I/O (replaces -t)
+        aux-tty        – TTY path for guest auxiliary serial I/O (replaces -a)
+        debug-console  – TTY path for the embedded Python console (replaces -ec)
+        script         - A script.jsonl for scheduled input to the console.
+    """
     dname = Path(dname)
     # Provide some defaults
     conf = {
@@ -60,16 +70,24 @@ def read_config(dname):
         'prom1': '',
     }
 
-    # TODO : consider using existing config parsers
-    with (dname / "config.txt").open() as cf:
-        for line in cf:
-            line = line.partition("#")[0].strip()
-            if not line:
-                continue
-            key, separator, value = line.partition(":")
-            if not separator:
-                continue
-            conf[key.strip()] = value.strip()
+    config_path = dname / "config.toml"
+    print("confpath", config_path)
+    if config_path.exists():
+        with config_path.open("rb") as f:
+            toml_data = tomllib.load(f)
+        # Map TOML keys to our config dict keys.
+        key_map = {
+            "board": "board",
+            "prom0": "prom0",
+            "prom1": "prom1",
+            "console-tty": "console-tty",
+            "aux-tty": "aux-tty",
+            "debug-console": "debug-console",
+            "script" : "script",
+        }
+        for toml_key, conf_key in key_map.items():
+            if toml_key in toml_data:
+                conf[conf_key] = toml_data[toml_key]
 
     return conf
 

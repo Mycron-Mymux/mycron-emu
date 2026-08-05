@@ -43,6 +43,8 @@ class Board1001(Board):
 
         # I/O ports
         # self.sport = IOSerialDim1001(console_output)
+        # TODO: The board has a TMS6011NC serial port controller, so it's likely to have
+        # a second port wired up aux similarly to the 1003 board.
         self.sport = SerialDIM1001(output=channels.console_output.send)
         self.sport.register_ports(self.io_ports)
 
@@ -60,6 +62,7 @@ class Board1003(Board):
 
         # I/O ports
         # self.sport = IOSerial(console_output)
+        # Z80SIO
         self.sport = SerialDIM1003(
             output=channels.console_output.send,
             aux_output=channels.aux_output.send)

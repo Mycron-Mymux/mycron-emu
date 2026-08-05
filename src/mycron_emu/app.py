@@ -149,19 +149,45 @@ def dump_mem(fname):
 
 
 def make_config(args):
-    """Reads config file and adds information from args to the config"""
+    """Reads config file and merges with CLI args, where args take precedence.
+
+    CLI flags override config file values:
+      -t / -ti/-to  >  console-tty
+      -a            >  aux-tty
+      -ec           >  debug-console
+    """
+    # Read from TOML config file.
+    config = read_config(args.config_dir)
+    print(config)
+    print(args)
+
+    # --- console-tty (maps to -t / -ti / -to) ---
+    # If -t is given, use it for both input and output.
     if args.t:
         # Use the same pty for both input and output
         args.ti = args.t
         args.to = args.t
 
-    if (not args.ti) or (not args.to):
-        raise SystemExit(f"Please specify -t, or specify both -ti and -to")
+    # If -ti/-to are not given by the user, fall back to console-tty from config,
+    # or require them to be specified.
+    if not args.ti or not args.to:
+        # Config key is "console-tty"; split into console_in / console_out.
+        # Currently the config only supports a single TTY path (both in+out).
+        console_tty = config.get("console-tty")
+        if console_tty and not args.ti:
+            args.ti = console_tty
+        if console_tty and not args.to:
+            args.to = console_tty
 
-    config = read_config(args.config_dir)
+    # --- aux-tty (maps to -a/--aux) ---
+    if not args.aux:
+        args.aux = config.get("aux-tty")
 
-    # Maybe not the cleanest yet, but this is a step towards a single
-    # config environment without having to deal with arg parsing.
+    # --- debug-console (maps to -ec/--embedded-console) ---
+    if args.embedded_console is None:
+        args.embedded_console = config.get("debug-console")
+
+    # Populate the config dict from args and config.
     config['run-dir']          = args.config_dir
     config['console_in']       = args.ti
     config['console_out']      = args.to
@@ -170,6 +196,11 @@ def make_config(args):
     config['embedded_console'] = args.embedded_console
     config['aux']              = args.aux
     log.debug(config)
+
+    if (not args.ti) or (not args.to):
+        raise SystemExit(f"Please specify -t, or specify both -ti and -to. Alternatively, specify console-tty in {args.config_dir}/config.toml")
+
+
     return config
 
 

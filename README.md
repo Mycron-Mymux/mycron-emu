@@ -55,10 +55,23 @@ You should now have two commands available:
 ## Using the emulator
 
 Before starting the emulator, you need the following:
+- A method for setting up a virtual pty
+- A terminal program or simple program to read and write
+  to the pty from the user side
+- Optional: pty for aux I/O
+- Optional: pty for python debug console
+
+I'm providing a program in tools (`setup-socat.py`) that can
+set up the virtual ptys/ttys for you. It also provides suggestions
+for tools to connect to the ttys and how to connect to the correct ttys.
+
+You only need the console, the others are optional.
+
+See below for more details and suggestions.
 
 ### A method for setting up a virtual pty
 
-I'm using the following:
+If you want to do this manually, you can use socat like follows:
 
     `socat -d -d pty,rawer,echo=0 pty,rawer,echo=0`
 
@@ -89,7 +102,7 @@ included in the directory. This is on the TODO list.
 
 The main things that needs to be included here are:
 
-- the config file
+- the config file (toml format)
 - PROM dumps
 - diskette images (if you intend to use diskette simulation)
 
