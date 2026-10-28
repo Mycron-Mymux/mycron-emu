@@ -46,11 +46,9 @@ install, try to run (from the main directory):
 Note the final dot in the command. It is necessary to tell pip to install
 it as a module linked to the current directory.
 
-You should now have two commands available:
+You should now have the following command available:
 
 - mycron : the main program for the emulator.
-- makedisk : a utility program to make disk images.
-  It supports empty disks and Mycron DATA and PROG disks.
 
 ## Using the emulator
 
